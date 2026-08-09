@@ -4,6 +4,6 @@ pub mod fault_ops;
 pub mod probe_scraper;
 
 pub use cluster::K3dCluster;
-pub use discovery::{discover_pods, discover_services, PodInfo, ServiceInfo};
+pub use discovery::{PodInfo, ServiceInfo, discover_pods, discover_services};
 pub use fault_ops::FaultOperator;
 pub use probe_scraper::scrape_probes;

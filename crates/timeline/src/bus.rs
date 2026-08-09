@@ -110,11 +110,11 @@ mod tests {
     fn test_timeline_emit_and_len() {
         let timeline = Timeline::new();
         assert!(timeline.is_empty());
-        
+
         timeline.emit(EventKind::Note {
             message: "Test".to_string(),
         });
-        
+
         assert_eq!(timeline.len(), 1);
         assert!(!timeline.is_empty());
     }
@@ -138,7 +138,7 @@ mod tests {
         }
 
         assert_eq!(handle.len(), 10);
-        
+
         let events = handle.events();
         for i in 0..events.len() - 1 {
             assert!(events[i].elapsed <= events[i + 1].elapsed);

@@ -3,7 +3,7 @@ use heisensim_probe::{
     ExecProbeConfig, GrpcProbeConfig, HttpMethod, HttpProbeConfig, ProbeConfig, TcpProbeConfig,
 };
 use k8s_openapi::api::core::v1::Pod;
-use kube::{api::ListParams, Api, Client};
+use kube::{Api, Client, api::ListParams};
 
 /// Scrape Kubernetes readiness and liveness probes from all pods in a namespace,
 /// converting them into heisensim `ProbeConfig` entries.

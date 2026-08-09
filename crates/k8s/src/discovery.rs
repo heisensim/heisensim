@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::{Pod, Service};
-use kube::{api::ListParams, Api, Client};
+use kube::{Api, Client, api::ListParams};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -23,7 +23,10 @@ pub struct ServiceInfo {
 
 pub async fn discover_pods(client: &Client, namespace: &str) -> Result<Vec<PodInfo>> {
     let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
-    let pods = api.list(&ListParams::default()).await.context("Failed to list pods")?;
+    let pods = api
+        .list(&ListParams::default())
+        .await
+        .context("Failed to list pods")?;
 
     let mut pod_infos = Vec::new();
     for pod in pods {
@@ -42,7 +45,9 @@ pub async fn discover_pods(client: &Client, namespace: &str) -> Result<Vec<PodIn
         let mut is_ready = false;
         if let Some(status) = &pod.status {
             if let Some(conditions) = &status.conditions {
-                is_ready = conditions.iter().any(|c| c.type_ == "Ready" && c.status == "True");
+                is_ready = conditions
+                    .iter()
+                    .any(|c| c.type_ == "Ready" && c.status == "True");
             }
         }
 
@@ -60,7 +65,10 @@ pub async fn discover_pods(client: &Client, namespace: &str) -> Result<Vec<PodIn
 
 pub async fn discover_services(client: &Client, namespace: &str) -> Result<Vec<ServiceInfo>> {
     let api: Api<Service> = Api::namespaced(client.clone(), namespace);
-    let services = api.list(&ListParams::default()).await.context("Failed to list services")?;
+    let services = api
+        .list(&ListParams::default())
+        .await
+        .context("Failed to list services")?;
 
     let mut service_infos = Vec::new();
     for svc in services {

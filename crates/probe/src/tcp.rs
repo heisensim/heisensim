@@ -11,29 +11,23 @@ pub async fn check_tcp(config: &TcpProbeConfig) -> ProbeResult {
     let addr = format!("{}:{}", config.host, config.port);
 
     match timeout(timeout_dur, TcpStream::connect(&addr)).await {
-        Ok(Ok(_stream)) => {
-            ProbeResult {
-                success: true,
-                latency: start.elapsed(),
-                status_code: None,
-                error: None,
-            }
-        }
-        Ok(Err(e)) => {
-            ProbeResult {
-                success: false,
-                latency: start.elapsed(),
-                status_code: None,
-                error: Some(format!("Connection failed: {}", e)),
-            }
-        }
-        Err(_) => {
-            ProbeResult {
-                success: false,
-                latency: start.elapsed(),
-                status_code: None,
-                error: Some("Connection timed out".to_string()),
-            }
-        }
+        Ok(Ok(_stream)) => ProbeResult {
+            success: true,
+            latency: start.elapsed(),
+            status_code: None,
+            error: None,
+        },
+        Ok(Err(e)) => ProbeResult {
+            success: false,
+            latency: start.elapsed(),
+            status_code: None,
+            error: Some(format!("Connection failed: {}", e)),
+        },
+        Err(_) => ProbeResult {
+            success: false,
+            latency: start.elapsed(),
+            status_code: None,
+            error: Some("Connection timed out".to_string()),
+        },
     }
 }

@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use heisensim_timeline::{EventKind, TimelineHandle};
 use k8s_openapi::api::core::v1::Pod;
-use kube::{api::{Api, DeleteParams}, Client};
+use kube::{
+    Client,
+    api::{Api, DeleteParams},
+};
 use std::time::Duration;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -90,7 +93,15 @@ impl FaultOperator {
             namespace,
             pod_name,
             &[
-                "tc", "qdisc", "add", "dev", "eth0", "root", "netem", "delay", &delay_arg,
+                "tc",
+                "qdisc",
+                "add",
+                "dev",
+                "eth0",
+                "root",
+                "netem",
+                "delay",
+                &delay_arg,
                 &jitter_arg,
             ],
         )
@@ -128,8 +139,12 @@ impl FaultOperator {
         pod_name: &str,
         fault_id: Uuid,
     ) -> Result<()> {
-        self.exec_in_pod(namespace, pod_name, &["tc", "qdisc", "del", "dev", "eth0", "root"])
-            .await?;
+        self.exec_in_pod(
+            namespace,
+            pod_name,
+            &["tc", "qdisc", "del", "dev", "eth0", "root"],
+        )
+        .await?;
 
         self.timeline.emit(EventKind::FaultReverted { fault_id });
         info!(pod = pod_name, "Reverted network latency");

@@ -42,10 +42,7 @@ pub enum EventKind {
         latency_ms: Option<u64>,
     },
     /// A probe timed out
-    ProbeTimeout {
-        probe_name: String,
-        timeout_ms: u64,
-    },
+    ProbeTimeout { probe_name: String, timeout_ms: u64 },
     /// The workload being tested started
     WorkloadStarted { command: String, pid: Option<u32> },
     /// The workload being tested exited
@@ -80,7 +77,7 @@ mod tests {
         let serialized = serde_json::to_string(&event).expect("Failed to serialize");
         let deserialized: TimelineEvent =
             serde_json::from_str(&serialized).expect("Failed to deserialize");
-        
+
         assert_eq!(event.id, deserialized.id);
         assert_eq!(event.elapsed, deserialized.elapsed);
     }

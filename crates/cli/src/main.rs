@@ -4,12 +4,12 @@
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::path::PathBuf;
-use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
-use rand::{rngs::StdRng, SeedableRng, Rng};
 use std::time::Duration;
 use tokio::time::sleep;
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 mod report;
 
@@ -165,7 +165,8 @@ async fn handle_run(args: RunArgs) -> Result<()> {
 
     // Connect to K8s
     info!("Connecting to Kubernetes cluster...");
-    let client = kube::Client::try_default().await
+    let client = kube::Client::try_default()
+        .await
         .context("Failed to connect to Kubernetes. Is a cluster running?")?;
     info!("Connected to cluster.");
 
@@ -215,9 +216,7 @@ async fn handle_run(args: RunArgs) -> Result<()> {
         info!("Spawning workload: {}", workload);
         let parts: Vec<&str> = workload.split_whitespace().collect();
         if let Some((cmd, cmd_args)) = parts.split_first() {
-            let child = tokio::process::Command::new(cmd)
-                .args(cmd_args)
-                .spawn();
+            let child = tokio::process::Command::new(cmd).args(cmd_args).spawn();
             match child {
                 Ok(c) => {
                     handle.emit(heisensim_timeline::EventKind::WorkloadStarted {
@@ -268,7 +267,10 @@ async fn handle_run(args: RunArgs) -> Result<()> {
         match fault_type.as_str() {
             "crash" => {
                 info!("💥 Injecting pod crash on {}", target.name);
-                match fault_op.inject_pod_crash(&args.namespace, &target.name).await {
+                match fault_op
+                    .inject_pod_crash(&args.namespace, &target.name)
+                    .await
+                {
                     Ok(id) => info!("  Fault {}: pod deleted", id),
                     Err(e) => warn!("  Failed to crash pod: {}", e),
                 }
@@ -277,9 +279,10 @@ async fn handle_run(args: RunArgs) -> Result<()> {
                 info!("🌐 Injecting network latency on {}", target.name);
                 let delay: u32 = rng.random_range(200..700);
                 let jitter: u32 = rng.random_range(50..150);
-                match fault_op.inject_network_latency(
-                    &args.namespace, &target.name, delay, jitter, 15.0
-                ).await {
+                match fault_op
+                    .inject_network_latency(&args.namespace, &target.name, delay, jitter, 15.0)
+                    .await
+                {
                     Ok(id) => info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter),
                     Err(e) => warn!("  Failed to inject latency: {}", e),
                 }
@@ -329,13 +332,28 @@ async fn handle_run(args: RunArgs) -> Result<()> {
 fn parse_duration(s: &str) -> Result<std::time::Duration> {
     let s = s.trim();
     if let Some(secs) = s.strip_suffix('s') {
-        Ok(std::time::Duration::from_secs(secs.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid seconds: {}", e))?))
+        Ok(std::time::Duration::from_secs(
+            secs.parse::<u64>()
+                .map_err(|e| anyhow::anyhow!("Invalid seconds: {}", e))?,
+        ))
     } else if let Some(mins) = s.strip_suffix('m') {
-        Ok(std::time::Duration::from_secs(mins.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid minutes: {}", e))? * 60))
+        Ok(std::time::Duration::from_secs(
+            mins.parse::<u64>()
+                .map_err(|e| anyhow::anyhow!("Invalid minutes: {}", e))?
+                * 60,
+        ))
     } else if let Some(hours) = s.strip_suffix('h') {
-        Ok(std::time::Duration::from_secs(hours.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid hours: {}", e))? * 3600))
+        Ok(std::time::Duration::from_secs(
+            hours
+                .parse::<u64>()
+                .map_err(|e| anyhow::anyhow!("Invalid hours: {}", e))?
+                * 3600,
+        ))
     } else {
-        Ok(std::time::Duration::from_secs(s.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid duration: {}", e))?))
+        Ok(std::time::Duration::from_secs(
+            s.parse::<u64>()
+                .map_err(|e| anyhow::anyhow!("Invalid duration: {}", e))?,
+        ))
     }
 }
 
@@ -344,35 +362,42 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
     println!("Config Summary:");
     println!("  Namespace: {}", args.namespace);
     println!("  Duration: {}", args.duration);
-    
+
     info!("Running replay mode...");
     // Same steps as run...
-    
+
     Ok(())
 }
 
 async fn handle_init(args: InitArgs) -> Result<()> {
     info!("Connecting to Kubernetes cluster...");
-    info!("Discovering services and probes in namespace '{}'...", args.namespace);
+    info!(
+        "Discovering services and probes in namespace '{}'...",
+        args.namespace
+    );
     info!("Generating heisensim.toml configuration...");
     info!("Writing configuration to '{}'...", args.output.display());
     Ok(())
 }
 
 async fn handle_report(args: ReportArgs) -> Result<()> {
-    info!("Loading timeline from JSON file: '{}'...", args.input.display());
-    
+    info!(
+        "Loading timeline from JSON file: '{}'...",
+        args.input.display()
+    );
+
     // We mock timeline events here to fit the existing CLI code, normally we would load from file
     let content = std::fs::read_to_string(&args.input).unwrap_or_else(|_| "[]".to_string());
-    let events: Vec<heisensim_timeline::event::TimelineEvent> = serde_json::from_str(&content).unwrap_or_default();
-    
+    let events: Vec<heisensim_timeline::event::TimelineEvent> =
+        serde_json::from_str(&content).unwrap_or_default();
+
     info!("Running timeline queries (summary, fault-to-detection latency)...");
-    
+
     match args.format.as_str() {
         "json" => println!("{}", report::render_json_report(&events)),
         "markdown" => println!("{}", report::render_markdown_report(&events)),
         _ => report::render_terminal_report(&events),
     }
-    
+
     Ok(())
 }

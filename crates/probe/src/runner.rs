@@ -28,7 +28,7 @@ impl ProbeRunner {
 
             tokio::spawn(async move {
                 let name = probe.name().to_string();
-                
+
                 loop {
                     tokio::select! {
                         _ = cancel.changed() => {
@@ -73,7 +73,7 @@ impl ProbeRunner {
                 }
             });
         }
-        
+
         Ok(())
     }
 }

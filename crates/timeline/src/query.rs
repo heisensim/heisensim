@@ -36,7 +36,11 @@ pub fn first_failure_after(events: &[TimelineEvent], fault_id: Uuid) -> Option<&
     let fault_time = fault_time?;
 
     events.iter().find(|e| {
-        e.elapsed >= fault_time && matches!(e.kind, EventKind::ProbeFailed { .. } | EventKind::ProbeTimeout { .. })
+        e.elapsed >= fault_time
+            && matches!(
+                e.kind,
+                EventKind::ProbeFailed { .. } | EventKind::ProbeTimeout { .. }
+            )
     })
 }
 
@@ -51,12 +55,16 @@ pub fn fault_to_detection_latency(events: &[TimelineEvent], fault_id: Uuid) -> O
     })?;
 
     let failure_event = first_failure_after(events, fault_id)?;
-    
+
     Some(failure_event.elapsed.saturating_sub(fault_event.elapsed))
 }
 
 /// Get all events within a specific elapsed time window.
-pub fn events_in_window(events: &[TimelineEvent], start: Duration, end: Duration) -> Vec<&TimelineEvent> {
+pub fn events_in_window(
+    events: &[TimelineEvent],
+    start: Duration,
+    end: Duration,
+) -> Vec<&TimelineEvent> {
     events
         .iter()
         .filter(|e| e.elapsed >= start && e.elapsed <= end)
@@ -67,7 +75,12 @@ pub fn events_in_window(events: &[TimelineEvent], start: Duration, end: Duration
 pub fn failure_count(events: &[TimelineEvent]) -> usize {
     events
         .iter()
-        .filter(|e| matches!(e.kind, EventKind::ProbeFailed { .. } | EventKind::ProbeTimeout { .. }))
+        .filter(|e| {
+            matches!(
+                e.kind,
+                EventKind::ProbeFailed { .. } | EventKind::ProbeTimeout { .. }
+            )
+        })
         .count()
 }
 
@@ -130,10 +143,39 @@ mod tests {
     fn test_queries() {
         let fault_id = Uuid::new_v4();
         let events = vec![
-            create_event(1, EventKind::ProbeSuccess { probe_name: "A".into(), latency_ms: 10, status_code: None }),
-            create_event(2, EventKind::FaultInjected { fault_id, fault_kind: "drop".into(), target: "net".into(), duration_secs: None }),
-            create_event(3, EventKind::ProbeSuccess { probe_name: "A".into(), latency_ms: 10, status_code: None }),
-            create_event(5, EventKind::ProbeFailed { probe_name: "A".into(), error: "timeout".into(), latency_ms: None }),
+            create_event(
+                1,
+                EventKind::ProbeSuccess {
+                    probe_name: "A".into(),
+                    latency_ms: 10,
+                    status_code: None,
+                },
+            ),
+            create_event(
+                2,
+                EventKind::FaultInjected {
+                    fault_id,
+                    fault_kind: "drop".into(),
+                    target: "net".into(),
+                    duration_secs: None,
+                },
+            ),
+            create_event(
+                3,
+                EventKind::ProbeSuccess {
+                    probe_name: "A".into(),
+                    latency_ms: 10,
+                    status_code: None,
+                },
+            ),
+            create_event(
+                5,
+                EventKind::ProbeFailed {
+                    probe_name: "A".into(),
+                    error: "timeout".into(),
+                    latency_ms: None,
+                },
+            ),
         ];
 
         assert_eq!(fault_count(&events), 1);

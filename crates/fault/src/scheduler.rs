@@ -1,6 +1,6 @@
 //! Fault scheduler for Kubernetes targets
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -37,7 +37,12 @@ pub struct FaultScheduler {
 
 impl FaultScheduler {
     /// Creates a new fault scheduler.
-    pub fn new(seed: u64, enabled_faults: Vec<FaultType>, target_pods: Vec<String>, namespace: String) -> Self {
+    pub fn new(
+        seed: u64,
+        enabled_faults: Vec<FaultType>,
+        target_pods: Vec<String>,
+        namespace: String,
+    ) -> Self {
         Self {
             seed,
             rng: StdRng::seed_from_u64(seed),

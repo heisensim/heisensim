@@ -19,14 +19,16 @@ pub struct ProbeResult {
 pub async fn check_http(config: &HttpProbeConfig) -> ProbeResult {
     let start = Instant::now();
     let timeout = Duration::from_millis(config.timeout_ms);
-    
+
     let client = match Client::builder().timeout(timeout).build() {
         Ok(c) => c,
-        Err(e) => return ProbeResult {
-            success: false,
-            latency: start.elapsed(),
-            status_code: None,
-            error: Some(format!("Failed to build HTTP client: {}", e)),
+        Err(e) => {
+            return ProbeResult {
+                success: false,
+                latency: start.elapsed(),
+                status_code: None,
+                error: Some(format!("Failed to build HTTP client: {}", e)),
+            };
         }
     };
 
@@ -51,17 +53,19 @@ pub async fn check_http(config: &HttpProbeConfig) -> ProbeResult {
                 success,
                 latency: start.elapsed(),
                 status_code: Some(status),
-                error: if success { None } else { Some(format!("Unexpected status: {}", status)) },
+                error: if success {
+                    None
+                } else {
+                    Some(format!("Unexpected status: {}", status))
+                },
             }
         }
-        Err(e) => {
-            ProbeResult {
-                success: false,
-                latency: start.elapsed(),
-                status_code: e.status().map(|s| s.as_u16()),
-                error: Some(e.to_string()),
-            }
-        }
+        Err(e) => ProbeResult {
+            success: false,
+            latency: start.elapsed(),
+            status_code: e.status().map(|s| s.as_u16()),
+            error: Some(e.to_string()),
+        },
     }
 }
 

@@ -97,7 +97,7 @@ mod tests {
             timeout_ms: 1000,
             interval_ms: 5000,
         });
-        
+
         assert_eq!(config.name(), "test-tcp");
         assert_eq!(config.interval(), Duration::from_millis(5000));
     }
@@ -117,7 +117,7 @@ mod tests {
         let config: ProbeConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.name(), "health-check");
         assert_eq!(config.interval().as_millis(), 10000);
-        
+
         if let ProbeConfig::Http(http_cfg) = config {
             assert_eq!(http_cfg.expected_status, 200);
             assert!(matches!(http_cfg.method, HttpMethod::Get));
