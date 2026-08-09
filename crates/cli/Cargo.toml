@@ -28,3 +28,4 @@ tracing-subscriber.workspace = true
 chrono.workspace = true
 rand.workspace = true
 uuid.workspace = true
+kube.workspace = true

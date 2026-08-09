@@ -729,6 +729,7 @@ dependencies = [
  "heisensim-k8s",
  "heisensim-probe",
  "heisensim-timeline",
+ "kube",
  "rand 0.9.5",
  "serde",
  "serde_json",

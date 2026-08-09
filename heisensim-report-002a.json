@@ -1,0 +1,252 @@
+{
+  "summary": {
+    "duration": {
+      "nanos": 835993167,
+      "secs": 25
+    },
+    "first_failure_elapsed": {
+      "nanos": 2605000,
+      "secs": 8
+    },
+    "total_events": 17,
+    "total_failures": 11,
+    "total_faults": 3,
+    "total_probe_successes": 0
+  },
+  "timeline": [
+    {
+      "elapsed": {
+        "nanos": 17125,
+        "secs": 0
+      },
+      "id": "52b1899c-b0a6-45f1-817f-94da66da88e3",
+      "kind": {
+        "duration_secs": 20.0,
+        "seed": 42,
+        "type": "SimulationStarted"
+      },
+      "timestamp": "2026-08-09T23:01:48.716952Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 2605000,
+        "secs": 8
+      },
+      "id": "0d338f58-e83e-43d2-899e-db64008530f6",
+      "kind": {
+        "probe_name": "redis-87d4d966d-254gk/redis/readiness",
+        "timeout_ms": 3001,
+        "type": "ProbeTimeout"
+      },
+      "timestamp": "2026-08-09T23:01:56.719572Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 36940459,
+        "secs": 8
+      },
+      "id": "8e309314-1f99-4510-83b3-1e3e30352a3f",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.10/)",
+        "latency_ms": 3035,
+        "probe_name": "api-7bd96c87bd-rbxhr/nginx/readiness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:01:56.753909Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 37017542,
+        "secs": 8
+      },
+      "id": "605289d2-63bc-4bc1-9964-e1529b2ae253",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.11/)",
+        "latency_ms": 3034,
+        "probe_name": "api-7bd96c87bd-hrrwc/nginx/readiness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:01:56.753986Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 679640375,
+        "secs": 10
+      },
+      "id": "f8810ac7-f638-45c1-9c96-5f0848eb336e",
+      "kind": {
+        "duration_secs": 15.0,
+        "fault_id": "c7f8a581-cca3-4076-80c2-a32a245a49ee",
+        "fault_kind": "network_latency",
+        "target": "heisensim-demo/api-7bd96c87bd-hrrwc",
+        "type": "FaultInjected"
+      },
+      "timestamp": "2026-08-09T23:01:59.396620Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 5147167,
+        "secs": 15
+      },
+      "id": "8bdd12a4-473e-4798-962c-29b20cbe81fd",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.10/)",
+        "latency_ms": 5003,
+        "probe_name": "api-7bd96c87bd-rbxhr/nginx/liveness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:02:03.722144Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 5179959,
+        "secs": 15
+      },
+      "id": "456680cd-c72e-4f49-996c-6d65c29445e7",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.11/)",
+        "latency_ms": 5003,
+        "probe_name": "api-7bd96c87bd-hrrwc/nginx/liveness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:02:03.722179Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 817339875,
+        "secs": 15
+      },
+      "id": "d24229ca-31d5-47fb-b792-8686262c7773",
+      "kind": {
+        "duration_secs": 15.0,
+        "fault_id": "bd95d422-dc10-40a4-be0c-167a3c0a61d7",
+        "fault_kind": "network_latency",
+        "target": "heisensim-demo/redis-87d4d966d-254gk",
+        "type": "FaultInjected"
+      },
+      "timestamp": "2026-08-09T23:02:04.534342Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 6623417,
+        "secs": 16
+      },
+      "id": "fc2304ba-8a67-4fac-94e7-53c4b2e85c58",
+      "kind": {
+        "probe_name": "redis-87d4d966d-254gk/redis/readiness",
+        "timeout_ms": 3002,
+        "type": "ProbeTimeout"
+      },
+      "timestamp": "2026-08-09T23:02:04.723624Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 39412750,
+        "secs": 16
+      },
+      "id": "3b56aa88-d997-4cc9-b3a3-a23eb0e0a302",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.11/)",
+        "latency_ms": 3001,
+        "probe_name": "api-7bd96c87bd-hrrwc/nginx/readiness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:02:04.756414Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 39544542,
+        "secs": 16
+      },
+      "id": "cf4d75bb-6a37-4773-a587-e416f07112b3",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.10/)",
+        "latency_ms": 3001,
+        "probe_name": "api-7bd96c87bd-rbxhr/nginx/readiness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:02:04.756548Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 833496250,
+        "secs": 20
+      },
+      "id": "04abb061-b4ac-4d47-858c-022b23c326c9",
+      "kind": {
+        "duration_secs": null,
+        "fault_id": "5c44e602-9ca4-46a7-9a28-f1159af8ebb5",
+        "fault_kind": "pod_crash",
+        "target": "heisensim-demo/redis-87d4d966d-254gk",
+        "type": "FaultInjected"
+      },
+      "timestamp": "2026-08-09T23:02:09.550520Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 10659167,
+        "secs": 24
+      },
+      "id": "12040506-4cdc-4928-afbf-ce3ef6ed0acc",
+      "kind": {
+        "probe_name": "redis-87d4d966d-254gk/redis/readiness",
+        "timeout_ms": 3001,
+        "type": "ProbeTimeout"
+      },
+      "timestamp": "2026-08-09T23:02:12.727695Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 43994375,
+        "secs": 24
+      },
+      "id": "b472d5cf-e3cb-4871-b4af-29029805b56b",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.11/)",
+        "latency_ms": 3002,
+        "probe_name": "api-7bd96c87bd-hrrwc/nginx/readiness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:02:12.761031Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 43994375,
+        "secs": 24
+      },
+      "id": "cf9bd73c-8a59-4f5f-b6aa-22fccc5211db",
+      "kind": {
+        "error": "error sending request for url (http://10.42.0.10/)",
+        "latency_ms": 3002,
+        "probe_name": "api-7bd96c87bd-rbxhr/nginx/readiness",
+        "type": "ProbeFailed"
+      },
+      "timestamp": "2026-08-09T23:02:12.761030Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 773770709,
+        "secs": 25
+      },
+      "id": "3b606690-e2fe-46e8-b0db-43d64638ae82",
+      "kind": {
+        "fault_id": "c7f8a581-cca3-4076-80c2-a32a245a49ee",
+        "type": "FaultReverted"
+      },
+      "timestamp": "2026-08-09T23:02:14.490815Z"
+    },
+    {
+      "elapsed": {
+        "nanos": 835993167,
+        "secs": 25
+      },
+      "id": "7dc95364-2d4f-4dd1-ab24-95dd8eab5dc6",
+      "kind": {
+        "total_failures": 11,
+        "total_faults": 3,
+        "type": "SimulationEnded"
+      },
+      "timestamp": "2026-08-09T23:02:14.553037Z"
+    }
+  ]
+}

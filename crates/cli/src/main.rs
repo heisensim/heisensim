@@ -2,7 +2,7 @@
 //!
 //! Provides deterministic chaos testing for Kubernetes.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -150,63 +150,193 @@ async fn handle_run(args: RunArgs) -> Result<()> {
     println!("  Warmup: {}", args.warmup);
     println!("  K3d: {}", args.k3d);
     println!("  Faults: {:?}", args.faults);
-    
-    // 3. Create K3d cluster if --k3d flag set
+
+    // Parse durations
+    let duration = parse_duration(&args.duration)?;
+    let warmup = parse_duration(&args.warmup)?;
+
+    // Create K3d cluster if requested
     if args.k3d {
         info!("Creating ephemeral K3d cluster...");
+        let cluster_name = format!("heisensim-{:04x}", seed & 0xFFFF);
+        heisensim_k8s::K3dCluster::create(&cluster_name).await?;
+        info!("K3d cluster '{}' created.", cluster_name);
     }
-    
-    // 4. Connect to K8s cluster via kube::Client::try_default()
+
+    // Connect to K8s
     info!("Connecting to Kubernetes cluster...");
-    
-    // 5. Discover pods in namespace using heisensim_k8s::discovery
+    let client = kube::Client::try_default().await
+        .context("Failed to connect to Kubernetes. Is a cluster running?")?;
+    info!("Connected to cluster.");
+
+    // Discover pods
     info!("Discovering pods in namespace '{}'...", args.namespace);
-    
-    // 6. Scrape probe configs using heisensim_k8s::probe_scraper  
-    info!("Scraping probe configs...");
-    
-    // 7. Print discovered services and probes
-    info!("Found services and probes.");
-    
-    // 8. Create Timeline
-    info!("Creating timeline...");
-    
-    // 9. Emit SimulationStarted event
-    info!("Emitting SimulationStarted event.");
-    
-    // 10. Start ProbeRunner (spawns background tasks)
-    info!("Starting ProbeRunner...");
-    
-    // 11. If --workload specified, spawn it as a child process and emit WorkloadStarted
+    let pods = heisensim_k8s::discovery::discover_pods(&client, &args.namespace).await?;
+    info!("Found {} pods.", pods.len());
+    for pod in &pods {
+        info!("  Pod: {} (ready: {})", pod.name, pod.is_ready);
+    }
+
+    // Scrape K8s probes
+    info!("Scraping probe configs from pod specs...");
+    let probes = heisensim_k8s::probe_scraper::scrape_probes(&client, &args.namespace).await?;
+    info!("Discovered {} probes:", probes.len());
+    for p in &probes {
+        info!("  - {}", p.name());
+    }
+
+    if probes.is_empty() {
+        warn!("No probes found! Make sure pods have readinessProbe or livenessProbe configured.");
+    }
+
+    // Create timeline
+    let handle = heisensim_timeline::TimelineHandle::new();
+
+    // Emit start event
+    handle.emit(heisensim_timeline::EventKind::SimulationStarted {
+        seed,
+        duration_secs: duration.as_secs_f64(),
+    });
+
+    // Start probe runner
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let probe_runner = heisensim_probe::ProbeRunner::new(probes, handle.clone());
+    let probe_handle = tokio::spawn({
+        let runner = probe_runner;
+        async move {
+            if let Err(e) = runner.run(cancel_rx) {
+                warn!("Probe runner error: {}", e);
+            }
+        }
+    });
+
+    // Spawn BYO workload if specified
     if let Some(ref workload) = args.workload {
         info!("Spawning workload: {}", workload);
-        info!("Emitting WorkloadStarted event.");
+        let parts: Vec<&str> = workload.split_whitespace().collect();
+        if let Some((cmd, cmd_args)) = parts.split_first() {
+            let child = tokio::process::Command::new(cmd)
+                .args(cmd_args)
+                .spawn();
+            match child {
+                Ok(c) => {
+                    handle.emit(heisensim_timeline::EventKind::WorkloadStarted {
+                        command: workload.clone(),
+                        pid: c.id(),
+                    });
+                }
+                Err(e) => warn!("Failed to spawn workload: {}", e),
+            }
+        }
     }
-    
-    // 12. Wait for warmup duration
-    info!("Waiting for warmup duration: {}", args.warmup);
-    
-    // 13. Run fault scheduler loop
-    info!("Running fault scheduler loop...");
+
+    // Warmup — let probes stabilize before injecting faults
+    info!("Warming up for {}...", args.warmup);
+    tokio::time::sleep(warmup).await;
+    info!("Warmup complete. Starting fault injection.");
+
+    // Fault injection loop
+    let fault_op = heisensim_k8s::FaultOperator::new(client.clone(), handle.clone());
     let mut rng = StdRng::seed_from_u64(seed);
-    
-    // 14. Wait for remaining duration
-    info!("Waiting for remaining duration...");
-    
-    // 15. Stop probes (send cancel signal)
+    let fault_interval = duration / 4.max(1); // inject ~4 faults over the duration
+    let mut elapsed = std::time::Duration::ZERO;
+
+    while elapsed < duration {
+        tokio::time::sleep(fault_interval).await;
+        elapsed += fault_interval;
+
+        if elapsed >= duration {
+            break;
+        }
+
+        // Pick a random pod to target
+        let live_pods = heisensim_k8s::discovery::discover_pods(&client, &args.namespace).await?;
+        let ready_pods: Vec<_> = live_pods.iter().filter(|p| p.is_ready).collect();
+        if ready_pods.is_empty() {
+            warn!("No ready pods to target, skipping fault.");
+            continue;
+        }
+
+        let target_idx = rng.random_range(0..ready_pods.len());
+        let target = &ready_pods[target_idx];
+
+        // Pick fault type from the enabled list
+        let fault_types = &args.faults;
+        let fault_idx = rng.random_range(0..fault_types.len());
+        let fault_type = &fault_types[fault_idx];
+
+        match fault_type.as_str() {
+            "crash" => {
+                info!("💥 Injecting pod crash on {}", target.name);
+                match fault_op.inject_pod_crash(&args.namespace, &target.name).await {
+                    Ok(id) => info!("  Fault {}: pod deleted", id),
+                    Err(e) => warn!("  Failed to crash pod: {}", e),
+                }
+            }
+            "latency" => {
+                info!("🌐 Injecting network latency on {}", target.name);
+                let delay: u32 = rng.random_range(200..700);
+                let jitter: u32 = rng.random_range(50..150);
+                match fault_op.inject_network_latency(
+                    &args.namespace, &target.name, delay, jitter, 15.0
+                ).await {
+                    Ok(id) => info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter),
+                    Err(e) => warn!("  Failed to inject latency: {}", e),
+                }
+            }
+            other => {
+                warn!("Unknown fault type '{}', skipping.", other);
+            }
+        }
+    }
+
+    // Stop probes
     info!("Stopping probes...");
-    
-    // 16. Emit SimulationEnded event
-    info!("Emitting SimulationEnded event.");
-    
-    // 17. Print timeline summary report to terminal
-    info!("Printing timeline summary report...");
-    report::render_terminal_report(&[]); // placeholder for actual events
-    
-    // 18. Save timeline to JSON file
-    info!("Saving timeline to JSON file...");
-    
+    let _ = cancel_tx.send(true);
+    let _ = probe_handle.await;
+
+    // Emit end event
+    let events = handle.events();
+    let summary = heisensim_timeline::query::summary(&events);
+    handle.emit(heisensim_timeline::EventKind::SimulationEnded {
+        total_faults: summary.total_faults,
+        total_failures: summary.total_failures,
+    });
+
+    // Report
+    let final_events = handle.events();
+    info!("Simulation complete. Rendering report...");
+    report::render_terminal_report(&final_events);
+
+    // Save JSON
+    let json = report::render_json_report(&final_events);
+    let json_path = format!("heisensim-report-{:04x}.json", seed & 0xFFFF);
+    std::fs::write(&json_path, &json)?;
+    info!("Timeline saved to {}", json_path);
+
+    // Cleanup K3d if we created it
+    if args.k3d {
+        let cluster_name = format!("heisensim-{:04x}", seed & 0xFFFF);
+        info!("Deleting ephemeral K3d cluster '{}'...", cluster_name);
+        let cluster = heisensim_k8s::K3dCluster { name: cluster_name };
+        cluster.delete().await?;
+    }
+
     Ok(())
+}
+
+/// Parse a duration string like "30s", "2m", "1h" into std::time::Duration
+fn parse_duration(s: &str) -> Result<std::time::Duration> {
+    let s = s.trim();
+    if let Some(secs) = s.strip_suffix('s') {
+        Ok(std::time::Duration::from_secs(secs.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid seconds: {}", e))?))
+    } else if let Some(mins) = s.strip_suffix('m') {
+        Ok(std::time::Duration::from_secs(mins.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid minutes: {}", e))? * 60))
+    } else if let Some(hours) = s.strip_suffix('h') {
+        Ok(std::time::Duration::from_secs(hours.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid hours: {}", e))? * 3600))
+    } else {
+        Ok(std::time::Duration::from_secs(s.parse::<u64>().map_err(|e| anyhow::anyhow!("Invalid duration: {}", e))?))
+    }
 }
 
 async fn handle_replay(args: ReplayArgs) -> Result<()> {
