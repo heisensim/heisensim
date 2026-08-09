@@ -11,6 +11,8 @@ use rand::{rngs::StdRng, SeedableRng, Rng};
 use std::time::Duration;
 use tokio::time::sleep;
 
+mod report;
+
 /// ASCII art banner printed on CLI startup.
 const BANNER: &str = r#"
 ██╗  ██╗███████╗██╗███████╗███████╗███╗   ██╗███████╗██╗███╗   ███╗
@@ -199,6 +201,7 @@ async fn handle_run(args: RunArgs) -> Result<()> {
     
     // 17. Print timeline summary report to terminal
     info!("Printing timeline summary report...");
+    report::render_terminal_report(&[]); // placeholder for actual events
     
     // 18. Save timeline to JSON file
     info!("Saving timeline to JSON file...");
@@ -228,27 +231,18 @@ async fn handle_init(args: InitArgs) -> Result<()> {
 
 async fn handle_report(args: ReportArgs) -> Result<()> {
     info!("Loading timeline from JSON file: '{}'...", args.input.display());
+    
+    // We mock timeline events here to fit the existing CLI code, normally we would load from file
+    let content = std::fs::read_to_string(&args.input).unwrap_or_else(|_| "[]".to_string());
+    let events: Vec<heisensim_timeline::event::TimelineEvent> = serde_json::from_str(&content).unwrap_or_default();
+    
     info!("Running timeline queries (summary, fault-to-detection latency)...");
     
-    let report = format!(
-r#"╔══════════════════════════════════════════════════════════════╗
-║  HEISENSIM REPORT                           seed: 0xDEAD   ║
-╠══════════════════════════════════════════════════════════════╣
-║  Duration: 5m 00s  │  Faults: 12  │  Failures: 3           ║
-╚══════════════════════════════════════════════════════════════╝
-
-Timeline:
-  00:30.000  💥  FAULT   Killed pod api-7f8b4c-x2k9f
-  00:30.150  ❌  PROBE   api/main/readiness FAILED (connection refused)
-  00:45.000  ✅  PROBE   api/main/readiness OK (23ms)
-  01:12.500  🌐  FAULT   Latency +500ms on db-postgres-0
-  01:13.100  ⚠️  PROBE   db/postgres/readiness SLOW (523ms)
-
-Findings:
-  1. api pod crash → probe failure in 150ms (recovery: 15s)
-  2. postgres latency → threshold exceeded by 23ms"#
-    );
+    match args.format.as_str() {
+        "json" => println!("{}", report::render_json_report(&events)),
+        "markdown" => println!("{}", report::render_markdown_report(&events)),
+        _ => report::render_terminal_report(&events),
+    }
     
-    println!("\n{}", report);
     Ok(())
 }
