@@ -1,3 +1,4 @@
+#![allow(dead_code, clippy::new_without_default)]
 /// Syscall handler logic for deterministic execution.
 use crate::syscall::{InterceptedSyscall, SyscallResult};
 // use heisensim_core::{VirtualClock, VirtualNetwork, SimSeed};

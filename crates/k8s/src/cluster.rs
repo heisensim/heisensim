@@ -9,7 +9,7 @@ pub struct K3dCluster {
 impl K3dCluster {
     pub async fn create(name: &str) -> Result<Self> {
         let status = Command::new("k3d")
-            .args(&["cluster", "create", name, "--no-lb", "--wait"])
+            .args(["cluster", "create", name, "--no-lb", "--wait"])
             .status()
             .await
             .context("Failed to run k3d create command")?;
@@ -25,7 +25,7 @@ impl K3dCluster {
 
     pub async fn delete(&self) -> Result<()> {
         let status = Command::new("k3d")
-            .args(&["cluster", "delete", &self.name])
+            .args(["cluster", "delete", &self.name])
             .status()
             .await
             .context("Failed to run k3d delete command")?;
@@ -39,7 +39,7 @@ impl K3dCluster {
 
     pub async fn exists(name: &str) -> Result<bool> {
         let output = Command::new("k3d")
-            .args(&["cluster", "list", "-o", "json"])
+            .args(["cluster", "list", "-o", "json"])
             .stdout(Stdio::piped())
             .output()
             .await
@@ -67,7 +67,7 @@ impl K3dCluster {
 
     pub async fn kubeconfig(&self) -> Result<String> {
         let output = Command::new("k3d")
-            .args(&["kubeconfig", "get", &self.name])
+            .args(["kubeconfig", "get", &self.name])
             .stdout(Stdio::piped())
             .output()
             .await

@@ -53,9 +53,7 @@ pub fn render_terminal_report(events: &[TimelineEvent]) {
 
     let mut report = String::new();
 
-    report.push_str(&format!(
-        "╔══════════════════════════════════════════════════════════════╗\n"
-    ));
+    report.push_str("╔══════════════════════════════════════════════════════════════╗\n");
 
     let header = if use_color {
         format!("{}HEISENSIM REPORT{}", BOLD_WHITE, RESET)
@@ -64,9 +62,7 @@ pub fn render_terminal_report(events: &[TimelineEvent]) {
     };
     report.push_str(&format!("║  {:<42} seed: 0x{:04X}   ║\n", header, seed));
 
-    report.push_str(&format!(
-        "╠══════════════════════════════════════════════════════════════╣\n"
-    ));
+    report.push_str("╠══════════════════════════════════════════════════════════════╣\n");
 
     let duration_str = format!(
         "{:02}m {:02}s",
@@ -77,9 +73,7 @@ pub fn render_terminal_report(events: &[TimelineEvent]) {
         "║  Duration: {:<7} │  Faults: {:<3} │  Failures: {:<11} ║\n",
         duration_str, summary.total_faults, summary.total_failures
     ));
-    report.push_str(&format!(
-        "╚══════════════════════════════════════════════════════════════╝\n\n"
-    ));
+    report.push_str("╚══════════════════════════════════════════════════════════════╝\n\n");
 
     report.push_str("Timeline:\n");
 

@@ -6,8 +6,6 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::path::PathBuf;
-use std::time::Duration;
-use tokio::time::sleep;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -237,7 +235,7 @@ async fn handle_run(args: RunArgs) -> Result<()> {
     // Fault injection loop
     let fault_op = heisensim_k8s::FaultOperator::new(client.clone(), handle.clone());
     let mut rng = StdRng::seed_from_u64(seed);
-    let fault_interval = duration / 4.max(1); // inject ~4 faults over the duration
+    let fault_interval = duration / 4; // inject ~4 faults over the duration
     let mut elapsed = std::time::Duration::ZERO;
 
     while elapsed < duration {

@@ -108,15 +108,15 @@ fn convert_probe(
             timeout_ms,
             interval_ms,
         }))
-    } else if let Some(exec_action) = &probe.exec {
-        Some(ProbeConfig::Exec(ExecProbeConfig {
-            name: name.to_string(),
-            command: exec_action.command.clone().unwrap_or_default(),
-            timeout_ms,
-            interval_ms,
-        }))
     } else {
-        None
+        probe.exec.as_ref().map(|exec_action| {
+            ProbeConfig::Exec(ExecProbeConfig {
+                name: name.to_string(),
+                command: exec_action.command.clone().unwrap_or_default(),
+                timeout_ms,
+                interval_ms,
+            })
+        })
     }
 }
 

@@ -58,8 +58,8 @@ impl FaultScheduler {
             return None;
         }
 
-        let fault_idx = self.rng.gen_range(0..self.enabled_faults.len());
-        let pod_idx = self.rng.gen_range(0..self.target_pods.len());
+        let fault_idx = self.rng.random_range(0..self.enabled_faults.len());
+        let pod_idx = self.rng.random_range(0..self.target_pods.len());
 
         Some(ScheduledFault {
             fault_type: self.enabled_faults[fault_idx].clone(),
@@ -73,7 +73,7 @@ impl FaultScheduler {
         if min_secs >= max_secs {
             return Duration::from_secs_f64(min_secs);
         }
-        let delay = self.rng.gen_range(min_secs..max_secs);
+        let delay = self.rng.random_range(min_secs..max_secs);
         Duration::from_secs_f64(delay)
     }
 }

@@ -1,4 +1,5 @@
-/// Autonomous state exploration and coverage-guided fuzzing engine.
+//! Autonomous state exploration and coverage-guided fuzzing engine.
+#![allow(dead_code, clippy::new_without_default)]
 
 /// Strategy for exploring the state space of a distributed system.
 #[derive(Debug, Clone)]
