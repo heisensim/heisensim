@@ -1,0 +1,21 @@
+[package]
+name = "heisensim-k8s"
+description = "Kubernetes integration for heisensim chaos testing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+heisensim-timeline.workspace = true
+heisensim-probe.workspace = true
+anyhow.workspace = true
+kube.workspace = true
+k8s-openapi.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+rand.workspace = true

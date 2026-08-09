@@ -1,6 +1,6 @@
 [package]
 name = "heisensim"
-description = "The Heisenbug Simulator — deterministic simulation testing for distributed systems"
+description = "The Heisenbug Simulator — deterministic chaos testing for Kubernetes"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,9 +13,10 @@ path = "src/main.rs"
 
 [dependencies]
 heisensim-core.workspace = true
-heisensim-intercept.workspace = true
+heisensim-timeline.workspace = true
+heisensim-probe.workspace = true
+heisensim-k8s.workspace = true
 heisensim-fault.workspace = true
-heisensim-props.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
@@ -24,3 +25,6 @@ toml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+chrono.workspace = true
+rand.workspace = true
+uuid.workspace = true

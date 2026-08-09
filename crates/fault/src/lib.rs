@@ -12,7 +12,9 @@
 pub mod explorer;
 pub mod injector;
 pub mod schedule;
+pub mod scheduler;
 
 pub use explorer::Explorer;
 pub use injector::FaultInjector;
 pub use schedule::FaultSchedule;
+pub use scheduler::{FaultScheduler, FaultType, ScheduledFault};
