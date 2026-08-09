@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: heisensim-demo
+---
+# Redis - backend datastore
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: heisensim-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        readinessProbe:
+          tcpSocket:
+            port: 6379
+          periodSeconds: 5
+          timeoutSeconds: 3
+        livenessProbe:
+          exec:
+            command: ["redis-cli", "ping"]
+          periodSeconds: 10
+          timeoutSeconds: 5
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: heisensim-demo
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+---
+# API - nginx frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: heisensim-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          periodSeconds: 5
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          periodSeconds: 10
+          timeoutSeconds: 5
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: heisensim-demo
+spec:
+  selector:
+    app: api
+  ports:
+  - port: 80
+    targetPort: 80

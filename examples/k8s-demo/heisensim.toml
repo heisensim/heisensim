@@ -1,0 +1,11 @@
+[simulation]
+seed = 42
+duration = "2m"
+warmup = "15s"
+namespace = "heisensim-demo"
+
+[faults]
+enabled = ["crash", "latency"]
+crash_probability = 0.1
+latency_ms = 300
+latency_jitter_ms = 100
