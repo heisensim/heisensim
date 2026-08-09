@@ -1,0 +1,15 @@
+[package]
+name = "heisensim-fault"
+description = "Fault injection and state exploration engine for heisensim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+heisensim-core.workspace = true
+rand.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+serde.workspace = true

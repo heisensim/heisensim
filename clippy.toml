@@ -1,0 +1,38 @@
+# heisensim clippy configuration
+
+# Function argument limits
+too-many-arguments-threshold = 8
+too-many-lines-threshold = 120
+
+# Code complexity limits
+cognitive-complexity-threshold = 25
+
+# Type complexity
+type-complexity-threshold = 250
+
+# Documentation & API guidelines
+doc-valid-idents = [
+    "heisensim",
+    "seccomp",
+    "ptrace",
+    "eBPF",
+    "Jepsen",
+    "Docker",
+    "Linux",
+    "API",
+    "APIs",
+    "CI",
+    "CPU",
+    "RAM",
+    "IO",
+    "Syscall",
+    "Syscalls",
+]
+
+# Formatting & safety controls
+avoid-breaking-exported-api = true
+msrv = "1.85.0"
+array-size-threshold = 512
+single-char-binding-names-threshold = 4
+enum-variant-name-threshold = 3
+struct-field-name-threshold = 3

@@ -1,0 +1,26 @@
+[package]
+name = "heisensim"
+description = "The Heisenbug Simulator — deterministic simulation testing for distributed systems"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "heisensim"
+path = "src/main.rs"
+
+[dependencies]
+heisensim-core.workspace = true
+heisensim-intercept.workspace = true
+heisensim-fault.workspace = true
+heisensim-props.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

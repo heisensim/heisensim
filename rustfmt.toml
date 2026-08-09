@@ -1,0 +1,18 @@
+# heisensim rustfmt configuration
+
+edition = "2024"
+max_width = 100
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Code style settings
+newline_style = "Unix"
+reorder_imports = true
+reorder_modules = true
+format_strings = false
+format_macro_bodies = true
+format_macro_matchers = true
+use_small_heuristics = "Default"
+merge_derives = true
+tab_spaces = 4
+hard_tabs = false

@@ -1,0 +1,18 @@
+[package]
+name = "heisensim-intercept"
+description = "Syscall interception layer for heisensim (seccomp-BPF, ptrace)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+heisensim-core.workspace = true
+nix.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
