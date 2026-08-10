@@ -45,9 +45,7 @@ impl TimelineProperty for Availability {
 
         for event in events {
             match &event.kind {
-                EventKind::ProbeSuccess { probe_name, .. }
-                    if self.matches_filter(probe_name) =>
-                {
+                EventKind::ProbeSuccess { probe_name, .. } if self.matches_filter(probe_name) => {
                     successes += 1;
                 }
                 EventKind::ProbeFailed { probe_name, .. }

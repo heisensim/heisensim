@@ -88,7 +88,10 @@ pub fn build_checker(defs: &[PropertyDef]) -> Result<TimelineChecker> {
                 }
                 Box::new(prop)
             }
-            other => anyhow::bail!("Unknown property type: '{}'. Supported: recovery_time, availability, error_budget, no_cascade, latency_p99", other),
+            other => anyhow::bail!(
+                "Unknown property type: '{}'. Supported: recovery_time, availability, error_budget, no_cascade, latency_p99",
+                other
+            ),
         };
         checker.add(prop);
     }
@@ -131,7 +134,10 @@ pub fn print_verdicts(verdicts: &[PropertyVerdict]) {
     println!("╚═══════════════════════════════════════════════════════════════╝");
 
     // Print details for failures
-    for v in verdicts.iter().filter(|v| !v.passed && !v.details.is_empty()) {
+    for v in verdicts
+        .iter()
+        .filter(|v| !v.passed && !v.details.is_empty())
+    {
         println!();
         println!("  {} details:", v.property_name);
         for detail in &v.details {
@@ -143,10 +149,7 @@ pub fn print_verdicts(verdicts: &[PropertyVerdict]) {
 
 /// Run property checking against timeline events and print results.
 /// Returns true if all properties passed.
-pub fn check_properties(
-    defs: &[PropertyDef],
-    events: &[TimelineEvent],
-) -> Result<bool> {
+pub fn check_properties(defs: &[PropertyDef], events: &[TimelineEvent]) -> Result<bool> {
     if defs.is_empty() {
         return Ok(true);
     }

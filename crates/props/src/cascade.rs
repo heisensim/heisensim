@@ -83,7 +83,10 @@ impl TimelineProperty for NoCascade {
                         "  ❌ fault on \"{}\" caused \"{}\" to fail at +{:.1}s",
                         target,
                         probe_name,
-                        window_event.elapsed.saturating_sub(fault_time).as_secs_f64()
+                        window_event
+                            .elapsed
+                            .saturating_sub(fault_time)
+                            .as_secs_f64()
                     ));
                 }
             }
@@ -216,6 +219,10 @@ mod tests {
         // api-health is in the allow list — should pass
         let prop = NoCascade::new("no-cascade", 30.0, vec!["api-health".into()]);
         let verdict = prop.evaluate(&events);
-        assert!(verdict.passed, "Expected pass with allow list: {:?}", verdict);
+        assert!(
+            verdict.passed,
+            "Expected pass with allow list: {:?}",
+            verdict
+        );
     }
 }

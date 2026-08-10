@@ -392,10 +392,9 @@ async fn handle_run(args: RunArgs) -> Result<i32> {
     // Property checking
     let mut exit_code = 0;
     if let Some(ref config_path) = args.config {
-        let config_str = std::fs::read_to_string(config_path)
-            .context("Failed to read config file")?;
-        let config: properties::PropertiesConfig = toml::from_str(&config_str)
-            .unwrap_or_default();
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
         if !config.properties.is_empty() {
             info!("Evaluating {} properties...", config.properties.len());
             let all_passed = properties::check_properties(&config.properties, &final_events)?;

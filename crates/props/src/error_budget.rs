@@ -69,7 +69,11 @@ impl TimelineProperty for ErrorBudget {
         }
 
         let expected = format!("max {} consecutive", self.max_consecutive);
-        let actual = format!("{} ({})", worst_count, worst_probe.as_deref().unwrap_or("none"));
+        let actual = format!(
+            "{} ({})",
+            worst_count,
+            worst_probe.as_deref().unwrap_or("none")
+        );
 
         if worst_count <= self.max_consecutive {
             PropertyVerdict::pass(&self.name, expected, actual)

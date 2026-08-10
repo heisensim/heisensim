@@ -138,9 +138,7 @@ mod tests {
 
     #[test]
     fn test_latency_fail() {
-        let mut events: Vec<_> = (0..98)
-            .map(|i| probe_event(i, "api", 10))
-            .collect();
+        let mut events: Vec<_> = (0..98).map(|i| probe_event(i, "api", 10)).collect();
         // Two outliers so p99 is definitely above threshold
         events.push(probe_event(98, "api", 1000));
         events.push(probe_event(99, "api", 1000));
@@ -172,9 +170,7 @@ mod tests {
 
     #[test]
     fn test_latency_p95() {
-        let mut events: Vec<_> = (0..90)
-            .map(|i| probe_event(i, "api", 10))
-            .collect();
+        let mut events: Vec<_> = (0..90).map(|i| probe_event(i, "api", 10)).collect();
         // 10 high-latency events (last 10%)
         for i in 90..100 {
             events.push(probe_event(i, "api", 600));
