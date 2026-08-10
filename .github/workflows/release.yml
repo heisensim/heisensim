@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -67,8 +70,6 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,20 +86,11 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Upload Release Assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          # Upload to existing release, or create one if it doesn't exist
-          if gh release view "$TAG" &>/dev/null; then
-            gh release upload "$TAG" artifacts/* --clobber
-          else
-            gh release create "$TAG" \
-              artifacts/* \
-              --title "Release $TAG" \
-              --generate-notes
-          fi
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
 
   publish:
     name: Publish to crates.io
