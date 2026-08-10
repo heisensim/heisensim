@@ -50,8 +50,19 @@ impl FaultOperator {
     pub async fn inject_pod_crash(&self, namespace: &str, pod_name: &str) -> Result<Uuid> {
         let api: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
         let fault_id = Uuid::new_v4();
+        let target = format!("{}/{}", namespace, pod_name);
+
+        let _span = tracing::info_span!(
+            "fault.inject",
+            fault.id = %fault_id,
+            fault.kind = "pod_crash",
+            fault.target = %target,
+            otel.name = format!("inject crash → {}", pod_name),
+        );
+        let _guard = _span.enter();
 
         info!(pod = pod_name, "Injecting pod crash: deleting pod");
+        drop(_guard); // Must drop before .await (EnteredSpan is !Send)
         api.delete(pod_name, &DeleteParams::default())
             .await
             .context("Failed to delete pod")?;
@@ -59,7 +70,7 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "pod_crash".to_string(),
-            target: format!("{}/{}", namespace, pod_name),
+            target,
             duration_secs: None,
         });
 
@@ -191,9 +202,22 @@ impl FaultOperator {
         duration_secs: f64,
     ) -> Result<Uuid> {
         let fault_id = Uuid::new_v4();
+        let target = format!("{}/{}", namespace, pod_name);
+
+        let _span = tracing::info_span!(
+            "fault.inject",
+            fault.id = %fault_id,
+            fault.kind = "network_latency",
+            fault.target = %target,
+            fault.delay_ms = delay_ms,
+            fault.duration_secs = duration_secs,
+            otel.name = format!("inject latency {}ms → {}", delay_ms, pod_name),
+        );
+        let _guard = _span.enter();
 
         let delay_arg = format!("{}ms", delay_ms);
         let jitter_arg = format!("{}ms", jitter_ms);
+        drop(_guard); // Must drop before .await
         self.exec_network_command(
             namespace,
             pod_name,
@@ -215,7 +239,7 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "network_latency".to_string(),
-            target: format!("{}/{}", namespace, pod_name),
+            target,
             duration_secs: Some(duration_secs),
         });
 
@@ -267,7 +291,19 @@ impl FaultOperator {
         duration_secs: f64,
     ) -> Result<Uuid> {
         let fault_id = Uuid::new_v4();
+        let target = format!("{}/{} -> {}", namespace, pod_a, pod_b_ip);
 
+        let _span = tracing::info_span!(
+            "fault.inject",
+            fault.id = %fault_id,
+            fault.kind = "network_partition",
+            fault.target = %target,
+            fault.duration_secs = duration_secs,
+            otel.name = format!("inject partition {} ↛ {}", pod_a, pod_b_ip),
+        );
+        let _guard = _span.enter();
+
+        drop(_guard); // Must drop before .await
         self.exec_network_command(
             namespace,
             pod_a,
@@ -278,7 +314,7 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "network_partition".to_string(),
-            target: format!("{}/{} -> {}", namespace, pod_a, pod_b_ip),
+            target,
             duration_secs: Some(duration_secs),
         });
 

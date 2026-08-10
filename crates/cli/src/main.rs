@@ -4,10 +4,14 @@
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_otlp::WithExportConfig;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::path::PathBuf;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod properties;
 mod report;
@@ -90,6 +94,11 @@ struct RunArgs {
     /// Output format: text (default) or json
     #[arg(long, default_value = "text")]
     output: OutputFormat,
+
+    /// OTLP endpoint for exporting traces (e.g. http://localhost:4318).
+    /// When set, heisensim exports fault injection and probe spans via OpenTelemetry.
+    #[arg(long)]
+    otel_endpoint: Option<String>,
 }
 
 /// Method for injecting network faults into pods.
@@ -184,25 +193,79 @@ struct ExploreArgs {
     /// Output format: text (default) or json
     #[arg(long, default_value = "text")]
     output: OutputFormat,
+
+    /// OTLP endpoint for exporting traces (e.g. http://localhost:4318).
+    #[arg(long)]
+    otel_endpoint: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 1. Initialize tracing subscriber
+    // 1. Parse CLI first to check for --otel-endpoint
+    let cli = Cli::parse();
+
+    // Extract otel_endpoint from the command args (if present)
+    let otel_endpoint = match &cli.command {
+        Commands::Run(args) => args.otel_endpoint.clone(),
+        Commands::Explore(args) => args.otel_endpoint.clone(),
+        _ => None,
+    };
+
+    // 2. Initialize tracing subscriber (with optional OTel layer)
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("heisensim=info,info"));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_thread_ids(false)
-        .with_file(false)
-        .init();
+        .with_file(false);
 
-    // 2. Print ASCII banner
+    let _otel_provider = if let Some(ref endpoint) = otel_endpoint {
+        // Set up W3C TraceContext propagator (E9 fix #1: must be set explicitly)
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .with_endpoint(endpoint)
+            .build()
+            .context("Failed to create OTLP exporter")?;
+
+        // E9 fix #3: AlwaysOn sampler — chaos events are high-value, low-volume
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name("heisensim")
+                    .build(),
+            )
+            .build();
+
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("heisensim"));
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt_layer)
+            .with(otel_layer)
+            .init();
+
+        info!(
+            endpoint = endpoint.as_str(),
+            "OpenTelemetry tracing enabled"
+        );
+        Some(provider)
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt_layer)
+            .init();
+        None
+    };
+
+    // 3. Print ASCII banner
     println!("{}", BANNER);
-
-    let cli = Cli::parse();
 
     let exit_code = match cli.command {
         Commands::Run(args) => handle_run(args).await?,
@@ -220,6 +283,22 @@ async fn main() -> Result<()> {
         }
         Commands::Explore(args) => handle_explore(args).await?,
     };
+
+    // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
+    if let Some(provider) = _otel_provider {
+        info!("Flushing OpenTelemetry traces...");
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || provider.shutdown()),
+        )
+        .await
+        {
+            Ok(Ok(Ok(()))) => info!("OpenTelemetry traces flushed."),
+            Ok(Ok(Err(e))) => warn!("OTel shutdown error: {}", e),
+            Ok(Err(e)) => warn!("OTel shutdown task panicked: {}", e),
+            Err(_) => warn!("OTel shutdown timed out after 3s, traces may be lost."),
+        }
+    }
 
     if exit_code != 0 {
         std::process::exit(exit_code);
@@ -839,12 +918,12 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
             let prop_defs = property_defs.clone();
 
             handles.push(tokio::spawn(async move {
-                info!("🔬 Starting seed 0x{:04X}...", seed);
+                info!(seed = seed, "🔬 Starting seed 0x{:04X}...", seed);
                 let result = run_single_simulation(
                     &client, &ns, seed, duration, warmup, &faults, method, &prop_defs,
                 )
                 .await;
-                info!("✅ Seed 0x{:04X} complete.", seed);
+                info!(seed = seed, "✅ Seed 0x{:04X} complete.", seed);
                 (seed, result)
             }));
         }

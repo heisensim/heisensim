@@ -31,6 +31,14 @@ impl ProbeRunner {
                 let name = probe.name().to_string();
 
                 loop {
+                    let interval = probe.interval();
+                    let span = tracing::info_span!(
+                        "probe.cycle",
+                        probe.name = %name,
+                        probe.interval_ms = interval.as_millis() as u64,
+                    );
+                    let _guard = span.enter();
+
                     tokio::select! {
                         _ = cancel.changed() => {
                             if *cancel.borrow() {
