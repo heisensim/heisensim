@@ -1,0 +1,198 @@
+name: Publish to crates.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no actual publish)'
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  # Publish order: dependency leaves first, CLI binary last
+  CRATE_ORDER: >-
+    heisensim-core
+    heisensim-timeline
+    heisensim-probe
+    heisensim-fault
+    heisensim-intercept
+    heisensim-props
+    heisensim-k8s
+    heisensim
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target directory
+        uses: Swatinem/rust-cache@v2
+
+      # ── Token validation ──────────────────────────────────────────
+      - name: Validate CARGO_REGISTRY_TOKEN
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::❌ CARGO_REGISTRY_TOKEN secret is not set."
+            echo ""
+            echo "To fix this:"
+            echo "  1. Go to https://crates.io/settings/tokens/new"
+            echo "  2. Create a token with 'publish-new' and 'publish-update' scopes"
+            echo "  3. Go to your repo Settings → Secrets → Actions"
+            echo "  4. Add a secret named CARGO_REGISTRY_TOKEN with the token value"
+            echo ""
+            echo "Note: crates.io tokens expire after 90 days by default."
+            echo "Set a calendar reminder to rotate the token before expiry."
+            exit 1
+          fi
+
+          echo "Token is set (${#CARGO_REGISTRY_TOKEN} chars). Validating..."
+
+      # ── Token expiry / auth check ─────────────────────────────────
+      - name: Check crates.io authentication
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Dry-run publish of the leaf crate to validate the token works
+          OUTPUT=$(cargo publish --dry-run -p heisensim-core 2>&1) || true
+
+          if echo "$OUTPUT" | grep -qi "token"; then
+            echo "::error::❌ crates.io token is invalid or expired!"
+            echo ""
+            echo "The token may have expired. crates.io tokens expire after the duration"
+            echo "you set when creating them (default: 90 days)."
+            echo ""
+            echo "To fix this:"
+            echo "  1. Go to https://crates.io/settings/tokens"
+            echo "  2. Revoke the expired token"
+            echo "  3. Create a new token with 'publish-new' and 'publish-update' scopes"
+            echo "  4. Go to https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "  5. Update the CARGO_REGISTRY_TOKEN secret with the new token value"
+            echo ""
+            echo "Raw error: $OUTPUT"
+            exit 1
+          fi
+
+          if echo "$OUTPUT" | grep -qi "email"; then
+            echo "::error::❌ Your crates.io account requires a verified email address."
+            echo ""
+            echo "Visit https://crates.io/settings/profile to verify your email."
+            echo ""
+            echo "Raw error: $OUTPUT"
+            exit 1
+          fi
+
+          echo "✅ Token is valid and authenticated."
+
+      # ── Preflight checks ──────────────────────────────────────────
+      - name: Run preflight checks
+        run: |
+          echo "Running formatting check..."
+          cargo fmt --all --check
+
+          echo "Running clippy..."
+          cargo clippy --workspace -- -D warnings
+
+          echo "Running tests..."
+          cargo test --workspace
+
+          echo "✅ All preflight checks passed."
+
+      # ── Publish crates ────────────────────────────────────────────
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          IS_DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          DRY_RUN_FLAG=""
+          if [ "$IS_DRY_RUN" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+            echo "🧪 DRY RUN MODE — no crates will actually be published"
+          fi
+
+          FAILED=0
+          PUBLISHED=0
+          SKIPPED=0
+
+          for CRATE in $CRATE_ORDER; do
+            echo ""
+            echo "═══════════════════════════════════════════════"
+            echo "  Publishing: $CRATE"
+            echo "═══════════════════════════════════════════════"
+
+            OUTPUT=$(cargo publish -p "$CRATE" $DRY_RUN_FLAG 2>&1) || true
+            EXIT_CODE=$?
+
+            if echo "$OUTPUT" | grep -q "already uploaded"; then
+              echo "⏭️  $CRATE — already published, skipping."
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if echo "$OUTPUT" | grep -qi "token\|unauthorized\|403"; then
+              echo "::error::❌ Token error while publishing $CRATE."
+              echo ""
+              echo "Your crates.io token may have expired mid-publish."
+              echo "Published crates so far: $PUBLISHED"
+              echo ""
+              echo "To fix: rotate your CARGO_REGISTRY_TOKEN secret."
+              echo "See: https://crates.io/settings/tokens"
+              echo ""
+              echo "Raw error: $OUTPUT"
+              FAILED=1
+              break
+            fi
+
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "::error::❌ Failed to publish $CRATE"
+              echo "$OUTPUT"
+              FAILED=1
+              break
+            fi
+
+            echo "✅ $CRATE published successfully."
+            PUBLISHED=$((PUBLISHED + 1))
+
+            # Wait for crates.io index to update before publishing dependents
+            if [ "$IS_DRY_RUN" != "true" ]; then
+              echo "⏳ Waiting 30s for crates.io index propagation..."
+              sleep 30
+            fi
+          done
+
+          echo ""
+          echo "═══════════════════════════════════════════════"
+          echo "  PUBLISH SUMMARY"
+          echo "═══════════════════════════════════════════════"
+          echo "  Published: $PUBLISHED"
+          echo "  Skipped:   $SKIPPED"
+          echo "  Failed:    $FAILED"
+          echo "═══════════════════════════════════════════════"
+
+          if [ $FAILED -ne 0 ]; then
+            exit 1
+          fi
+
+      # ── Create GitHub Release (on tag push only) ──────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Creating release for $TAG..."
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --latest
