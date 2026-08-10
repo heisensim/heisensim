@@ -1,0 +1,20 @@
+# heisensim lefthook config
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --workspace -- -D warnings
+    toml-check:
+      glob: "*.toml"
+      run: cargo check --workspace 2>&1 | tail -5
+
+pre-push:
+  commands:
+    test:
+      run: cargo test --workspace --lib

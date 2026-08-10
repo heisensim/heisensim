@@ -1,176 +1,231 @@
 # heisensim
 
 [![CI](https://github.com/heisensim/heisensim/actions/workflows/ci.yml/badge.svg)](https://github.com/heisensim/heisensim/actions)
+[![Release](https://github.com/heisensim/heisensim/actions/workflows/release.yml/badge.svg)](https://github.com/heisensim/heisensim/releases)
 [![Crates.io](https://img.shields.io/crates/v/heisensim.svg)](https://crates.io/crates/heisensim)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-MIT)
-[![Status](https://img.shields.io/badge/status-%F0%9F%A7%AA%20Alpha%20%E2%80%94%20Phase%201%20Complete-green.svg)](#status)
 
-> **"Deterministic chaos testing for Kubernetes"**
+> **"Deterministic chaos testing for Kubernetes — with SLA verification"**
 
-**heisensim** (The Heisenbug Simulator) is a deterministic chaos testing platform built in Rust for Kubernetes distributed systems. It automatically discovers your Kubernetes workloads, injects realistic network and pod faults, monitors pod health probes, and correlates failures with precise microsecond timing — enabling 100% reproducible chaos runs.
+**heisensim** is a chaos testing CLI that injects faults into your Kubernetes cluster, monitors health probes in real time, and **verifies your SLA properties automatically**.
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║  PROPERTY RESULTS                                  4/5 PASS  ║
+╠═══════════════════════════════════════════════════════════════╣
+║  ✅ PASS  fast-recovery      recovery < 30s (actual: 8.2s)   ║
+║  ❌ FAIL  high-availability  avail ≥ 99% (actual: 94.2%)     ║
+║  ✅ PASS  bounded-errors     max 5 consecutive (actual: 2)   ║
+║  ✅ PASS  no-cascade         no cascading failures            ║
+║  ✅ PASS  low-latency        p99 < 500ms (actual: 230ms)     ║
+╚═══════════════════════════════════════════════════════════════╝
+```
 
 ---
 
-## 🧪 Status
+## 📦 Install
 
-**Status: 🧪 Alpha — Phase 1 Complete**
+### Homebrew (macOS / Linux)
 
-heisensim Phase 1 is complete! Core Kubernetes auto-discovery, probe monitoring, fault injection (pod crashes, latency, network partitions), event timeline correlation, and seed-based replay are fully functional.
+```bash
+brew install heisensim/tap/heisensim
+```
 
----
+### Nix
 
-## ✨ What It Does
+```bash
+# Run directly
+nix run github:heisensim/heisensim
 
-- **Auto-discovers K8s pods and health probes**: Scrapes Kubernetes cluster APIs to discover target pods and their HTTP, TCP, and exec readiness/liveness probes.
-- **Injects faults**: Simulates real-world infrastructure failures including pod crashes (`kubectl delete`), network latency (`tc netem`), and network partitions.
-- **Monitors health probes during fault injection**: Continuously polls health probes during chaos runs to detect service degradation in real time.
-- **Correlates faults to probe failures**: Maps injected faults to probe failures with microsecond-level timing precision and detailed event timelines.
-- **Same seed = same faults = perfectly reproducible**: Uses pseudo-random seed generation (`--seed 42`). Running `heisensim` with the same seed produces identical fault sequences, timing, and target selection every time.
+# Or add to your flake
+inputs.heisensim.url = "github:heisensim/heisensim";
+
+# Dev shell (includes Rust toolchain, clippy, rustfmt)
+nix develop github:heisensim/heisensim
+```
+
+### Cargo
+
+```bash
+cargo install heisensim
+```
+
+### Pre-built binaries
+
+Download from [GitHub Releases](https://github.com/heisensim/heisensim/releases) — available for Linux (x86_64, aarch64) and macOS (x86_64, Apple Silicon).
 
 ---
 
 ## 🚀 Quick Start
 
 ```bash
-# Install
-cargo install --git https://github.com/heisensim/heisensim
-brew install k3d
-
-# Create cluster and deploy demo app
+# Create a cluster and deploy your app
 k3d cluster create demo --wait
 kubectl apply -f examples/k8s-demo/manifests.yaml
-kubectl wait --for=condition=Ready pods --all -n heisensim-demo --timeout=60s
 
-# Run chaos test
-heisensim run --namespace heisensim-demo --seed 42 --duration 30s
+# Auto-discover probes and generate config
+heisensim init --namespace heisensim-demo
+
+# Run chaos test with property checking
+heisensim run --namespace heisensim-demo --seed 42 --duration 2m --config heisensim.toml
 
 # Replay exact same run
-heisensim replay --seed 42 --namespace heisensim-demo --duration 30s
+heisensim replay --seed 42 --namespace heisensim-demo --duration 2m
 ```
+
+---
+
+## 🛡️ Property Checking
+
+The differentiator. Define SLA properties in TOML, heisensim evaluates them against the chaos test timeline:
+
+```toml
+# heisensim.toml
+
+[[properties]]
+name = "fast-recovery"
+type = "recovery_time"
+max_seconds = 30          # probes must recover within 30s of each fault
+
+[[properties]]
+name = "high-availability"
+type = "availability"
+min_percent = 99.0        # ≥99% probe success rate
+probe_filter = "api"      # only evaluate api-* probes
+
+[[properties]]
+name = "bounded-errors"
+type = "error_budget"
+max_consecutive = 5       # no more than 5 consecutive failures per probe
+
+[[properties]]
+name = "no-cascade"
+type = "no_cascade"
+window_seconds = 30
+allowed_failing_probes = ["redis"]  # redis probes expected to fail when redis is faulted
+
+[[properties]]
+name = "low-latency"
+type = "latency_p99"
+max_ms = 500              # p99 probe latency under 500ms
+```
+
+Properties produce verdicts with details:
+
+```
+  ❌ fast-recovery details:
+    ❌ fault abc123 on redis: recovered in 47.2s (exceeds 30s)
+    ✅ fault def456 on api: recovered in 3.1s
+```
+
+**Exit code 1** when any property fails — CI/CD friendly.
+
+### Available Properties
+
+| Property | What it checks | Required config |
+|:---|:---|:---|
+| `recovery_time` | Probes recover within N seconds after fault | `max_seconds` |
+| `availability` | Probe success rate ≥ N% | `min_percent` |
+| `error_budget` | Max consecutive failures per probe | `max_consecutive` |
+| `no_cascade` | Faults don't cascade to unexpected probes | — |
+| `latency_p99` | Probe latency at percentile ≤ threshold | `max_ms` |
+
+---
+
+## ✨ Features
+
+- **Auto-discovers K8s pods and health probes** — scrapes readiness/liveness probes from pod specs
+- **Injects faults** — pod crashes (`kubectl delete`), network latency (`tc netem`), partitions
+- **Ephemeral container injection** — works with distroless images via `kubectl debug`
+- **Monitors health probes during faults** — HTTP, TCP, gRPC, exec probes
+- **Correlates faults to failures** — microsecond-precision event timeline
+- **Deterministic replay** — same seed = same faults = same results
+- **Property checking** — verify SLA invariants automatically
+- **Explore mode** — run many seeds in parallel to find interesting failures
 
 ---
 
 ## 💻 CLI Reference
 
-`heisensim` provides 4 primary subcommands:
-
 ### `heisensim run`
-Runs a chaos simulation test against a Kubernetes namespace with specified fault injection rules and seed.
 
 ```bash
-heisensim run [OPTIONS]
+heisensim run --namespace demo --seed 42 --duration 2m --config heisensim.toml
 ```
 
-- `--namespace <NAMESPACE>`: Target Kubernetes namespace (default: `default`)
-- `--duration <DURATION>`: Simulation duration e.g. `30s`, `5m` (default: `5m`)
-- `--seed <SEED>`: Numeric seed for deterministic fault generation (default: random)
-- `--config <PATH>`: Path to configuration file (e.g. `heisensim.toml`)
-- `--workload <CMD>`: Optional workload command to execute during testing
-- `--warmup <DURATION>`: Warmup delay before fault injection starts (default: `30s`)
-- `--k3d`: Automatically spins up an ephemeral K3d cluster for the test run
-- `--faults <LIST>`: Comma-separated fault types e.g. `crash,latency` (default: `crash,latency`)
-- `--inject-method <METHOD>`: Network fault injection strategy: `exec` (container shell) or `debug` (ephemeral netshoot container) (default: `exec`)
+| Flag | Default | Description |
+|:---|:---|:---|
+| `--namespace` | `default` | Target K8s namespace |
+| `--duration` | `5m` | Test duration |
+| `--seed` | random | Deterministic seed |
+| `--config` | — | TOML config with `[[properties]]` |
+| `--warmup` | `30s` | Warmup before faults start |
+| `--faults` | `crash,latency` | Comma-separated fault types |
+| `--inject-method` | `exec` | `exec` or `debug` (ephemeral containers) |
+| `--k3d` | — | Spin up ephemeral K3d cluster |
 
-### `heisensim replay`
-Replays a previously executed simulation run using the exact same seed and parameters.
+### `heisensim explore`
+
+Run many seeds in parallel to find bugs:
 
 ```bash
-heisensim replay --seed <SEED> [OPTIONS]
+heisensim explore --namespace demo --seeds 50 --parallel 5 --duration 30s
 ```
-
-- `--seed <SEED>`: (**Required**) Seed value of the run to reproduce
-- `--namespace <NAMESPACE>`: Target Kubernetes namespace (default: `default`)
-- `--duration <DURATION>`: Simulation replay duration (default: `5m`)
-- `--config <PATH>`: Path to configuration file
 
 ### `heisensim init`
-Auto-discovers running workloads and probes in a Kubernetes namespace and outputs a starter `heisensim.toml` configuration file.
+
+Auto-generate config from running cluster:
 
 ```bash
-heisensim init [OPTIONS]
+heisensim init --namespace demo --output heisensim.toml
 ```
 
-- `--namespace <NAMESPACE>`: Target Kubernetes namespace (default: `default`)
-- `--output <PATH>`: Output configuration file path (default: `heisensim.toml`)
+### `heisensim replay`
 
-### `heisensim report`
-Generates formatted reports (terminal tables, markdown, or JSON) from recorded timeline event logs.
+Re-run a previous test with identical fault sequence:
 
 ```bash
-heisensim report --input <PATH> [OPTIONS]
+heisensim replay --seed 42 --namespace demo
 ```
-
-- `--input <PATH>`: (**Required**) Path to recorded timeline JSON file
-- `--format <FORMAT>`: Output format: `terminal`, `markdown`, or `json` (default: `terminal`)
 
 ---
 
 ## 🏗️ Architecture
 
-`heisensim` is organized as a workspace of modular Rust crates:
-
 ```text
 heisensim/
 ├── crates/
-│   ├── cli/         # heisensim — CLI binary, argument parser & report generator
-│   ├── timeline/    # heisensim-timeline — Microsecond event bus & timeline correlation
-│   ├── probe/       # heisensim-probe — Async probe runners (HTTP, TCP, exec)
-│   ├── k8s/         # heisensim-k8s — Kubernetes client, pod discovery & fault operators
-│   ├── fault/       # heisensim-fault — Fault scheduling & pseudo-random generators
-│   ├── core/        # heisensim-core — Core data models, event types & config schemas
-│   ├── intercept/   # heisensim-intercept — (Future: Syscall interception engine)
-│   └── props/       # heisensim-props — (Future: Invariant & property checking)
+│   ├── cli/         # CLI binary & orchestration
+│   ├── timeline/    # Microsecond event bus & correlation
+│   ├── probe/       # Async probe runners (HTTP, TCP, gRPC, exec)
+│   ├── k8s/         # K8s client, discovery & fault operators
+│   ├── fault/       # Fault scheduling & PRNG
+│   ├── props/       # Property checking (5 timeline-aware invariants)
+│   ├── core/        # Core types & config
+│   └── intercept/   # (Future: syscall interception)
 ```
-
-- **`heisensim`** (CLI): Top-level CLI binary handling command parsing, orchestration, and report formatting.
-- **`heisensim-timeline`** (event bus): High-performance event bus recording microsecond-timestamped fault and probe events.
-- **`heisensim-probe`** (health checks): Concurrent health check runner executing scraped HTTP, TCP, and exec probes.
-- **`heisensim-k8s`** (K8s integration): Kubernetes API client for pod auto-discovery, container scraping, and fault execution.
-- **`heisensim-fault`** (fault scheduling): Deterministic engine scheduling pod deletions, network delays (`tc netem`), and traffic drops.
-- **`heisensim-core`** (shared types): Common domain models, simulation interfaces, and configuration types.
-- **`heisensim-intercept`** *(Future)*: Low-level system call interception engine planned for Phase 3 process-level determinism.
-- **`heisensim-props`** *(Future)*: Property checking engine planned for Phase 2 temporal logic verification.
 
 ---
 
-## 💡 How It Works
-
-`heisensim` executes chaos tests through a 5-stage pipeline:
-
-```mermaid
-graph LR
-    Discover[1. Discover] --> Probe[2. Probe]
-    Probe --> Inject[3. Inject]
-    Inject --> Observe[4. Observe]
-    Observe --> Report[5. Report]
-```
-
-1. **Discover**: Scrapes the Kubernetes API to discover active workloads, pod replicas, and health probe definitions (liveness, readiness, HTTP, TCP, exec).
-2. **Probe**: Starts async health check runners to continuously monitor target pod endpoints at high frequency.
-3. **Inject**: Applies pseudo-randomly scheduled faults (pod terminations, `tc` network delays, partitions) governed by the seed.
-4. **Observe**: Captures probe failures and state transitions into `heisensim-timeline` with microsecond timestamps.
-5. **Report**: Correlates injected faults directly with probe failures, rendering visual terminal summaries and emitting JSON timeline logs.
-
----
-
-## ⚖️ Comparison Matrix
+## ⚖️ Comparison
 
 | Feature | heisensim | Chaos Monkey | Litmus | Chaos Mesh | Gremlin |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Deterministic Seed-Based Replay** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **K8s Auto-Discovery & Probing** | ✅ | ❌ | ⚠️ (Manual CRDs) | ⚠️ (Manual CRDs) | ❌ |
-| **Fault-to-Probe Latency Correlation** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Fault Injection (Pod Crash / Net)** | ✅ | ✅ (VM/AWS) | ✅ | ✅ | ✅ |
-| **Zero-CRD CLI Workflow** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Open Source** | ✅ (Apache 2.0 / MIT) | ✅ (Apache 2.0) | ✅ (Apache 2.0) | ✅ (Apache 2.0) | ❌ (Proprietary) |
+| **SLA Property Checking** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Deterministic Replay** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Auto-Discovery & Probing** | ✅ | ❌ | ⚠️ | ⚠️ | ❌ |
+| **Zero-CRD CLI** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Fault↔Failure Correlation** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Open Source** | ✅ | ✅ | ✅ | ✅ | ❌ |
 
 ---
 
 ## 🗺️ Roadmap
 
-- **Phase 1 ✅**: Kubernetes fault injection (crashes, latency, partitions), K8s pod/probe auto-discovery, microsecond timeline correlation engine, and deterministic seed-based execution.
-- **Phase 2 🔜**: Autonomous state space explore mode, temporal property checking (`heisensim-props`), gRPC probe scraping, and custom workload assertions.
-- **Phase 3 📋**: In-cluster DaemonSet agent, OpenTelemetry trace correlation, eBPF-based network partitions, and process-level syscall interception (`seccomp-BPF` / `ptrace`).
+- **Phase 1 ✅**: K8s fault injection, auto-discovery, timeline correlation, deterministic replay
+- **Phase 2 ✅**: Property checking, explore mode, ephemeral container injection, gRPC probes
+- **Phase 3 🔜**: DaemonSet agent, OpenTelemetry correlation, eBPF network partitions
+- **Phase 4 📋**: Process-level determinism (seccomp-BPF / ptrace)
 
 ---
 
