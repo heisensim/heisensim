@@ -9,3 +9,29 @@ enabled = ["crash", "latency"]
 crash_probability = 0.1
 latency_ms = 300
 latency_jitter_ms = 100
+
+[[properties]]
+name = "fast-recovery"
+type = "recovery_time"
+max_seconds = 30
+
+[[properties]]
+name = "high-availability"
+type = "availability"
+min_percent = 95.0
+
+[[properties]]
+name = "bounded-errors"
+type = "error_budget"
+max_consecutive = 5
+
+[[properties]]
+name = "no-cascade"
+type = "no_cascade"
+window_seconds = 30
+allowed_failing_probes = ["redis"]
+
+[[properties]]
+name = "low-latency"
+type = "latency_p99"
+max_ms = 500

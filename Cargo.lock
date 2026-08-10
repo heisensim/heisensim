@@ -781,6 +781,7 @@ dependencies = [
  "heisensim-fault",
  "heisensim-k8s",
  "heisensim-probe",
+ "heisensim-props",
  "heisensim-timeline",
  "kube",
  "rand 0.9.5",
@@ -865,11 +866,14 @@ dependencies = [
 name = "heisensim-props"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "heisensim-core",
+ "heisensim-timeline",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
