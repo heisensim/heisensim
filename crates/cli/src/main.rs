@@ -3,7 +3,7 @@
 //! Provides deterministic chaos testing for Kubernetes.
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -76,6 +76,21 @@ struct RunArgs {
 
     #[arg(long, default_value = "crash,latency", value_delimiter = ',')]
     faults: Vec<String>,
+
+    /// Method for injecting network faults into pods.
+    /// 'exec' runs commands directly inside the target container (requires tc/iptables in image).
+    /// 'debug' uses kubectl debug ephemeral containers with netshoot (works with any image).
+    #[arg(long, default_value = "exec", value_enum)]
+    inject_method: InjectMethod,
+}
+
+/// Method for injecting network faults into pods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum InjectMethod {
+    /// Execute commands directly in the target container (requires tc/iptables)
+    Exec,
+    /// Use kubectl debug ephemeral containers with netshoot image
+    Debug,
 }
 
 #[derive(Args, Debug)]
@@ -233,7 +248,13 @@ async fn handle_run(args: RunArgs) -> Result<()> {
     info!("Warmup complete. Starting fault injection.");
 
     // Fault injection loop
-    let fault_op = heisensim_k8s::FaultOperator::new(client.clone(), handle.clone());
+    let k8s_method = match args.inject_method {
+        InjectMethod::Exec => heisensim_k8s::InjectMethod::Exec,
+        InjectMethod::Debug => heisensim_k8s::InjectMethod::Debug,
+    };
+    info!("Injection method: {:?}", args.inject_method);
+    let fault_op =
+        heisensim_k8s::FaultOperator::with_method(client.clone(), handle.clone(), k8s_method);
     let mut rng = StdRng::seed_from_u64(seed);
     let fault_interval = duration / 4; // inject ~4 faults over the duration
     let mut elapsed = std::time::Duration::ZERO;
