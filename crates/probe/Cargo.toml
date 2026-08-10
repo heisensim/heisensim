@@ -20,3 +20,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { version = "1", features = ["full"] }
+opentelemetry = { version = "0.32", features = ["trace"] }
+opentelemetry_sdk = { version = "0.32", features = ["trace", "rt-tokio", "testing"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.33"

@@ -46,3 +46,8 @@ opentelemetry = { version = "0.32", features = ["trace"] }
 opentelemetry_sdk = { version = "0.32", features = ["trace", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["reqwest-client", "trace", "http-proto"] }
 tracing-opentelemetry = "0.33"
+
+[workspace.dev-dependencies]
+proptest = "1"
+wiremock = "0.6"
+tracing-test = "0.2"

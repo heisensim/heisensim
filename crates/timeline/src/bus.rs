@@ -198,4 +198,266 @@ mod tests {
         let events = handle.events();
         assert_eq!(events.len(), 10);
     }
+
+    #[test]
+    fn test_fault_injected_event_fields() {
+        let timeline = Timeline::new();
+        let fault_id = Uuid::new_v4();
+        timeline.emit(EventKind::FaultInjected {
+            fault_id,
+            fault_kind: "network_delay".to_string(),
+            target: "pod_a".to_string(),
+            duration_secs: Some(5.0),
+        });
+
+        let events = timeline.events();
+        assert_eq!(events.len(), 1);
+        if let EventKind::FaultInjected {
+            fault_id: fid,
+            fault_kind: fkind,
+            target: tgt,
+            duration_secs: dsecs,
+        } = &events[0].kind
+        {
+            assert_eq!(*fid, fault_id);
+            assert_eq!(fkind, "network_delay");
+            assert_eq!(tgt, "pod_a");
+            assert_eq!(*dsecs, Some(5.0));
+        } else {
+            panic!("Expected FaultInjected event");
+        }
+    }
+
+    #[test]
+    fn test_fault_reverted_event() {
+        let timeline = Timeline::new();
+        let fault_id = Uuid::new_v4();
+        timeline.emit(EventKind::FaultInjected {
+            fault_id,
+            fault_kind: "crash".to_string(),
+            target: "db".to_string(),
+            duration_secs: None,
+        });
+        timeline.emit(EventKind::FaultReverted { fault_id });
+
+        let events = timeline.events();
+        assert_eq!(events.len(), 2);
+        match &events[1].kind {
+            EventKind::FaultReverted { fault_id: fid } => {
+                assert_eq!(*fid, fault_id);
+            }
+            _ => panic!("Expected FaultReverted event"),
+        }
+    }
+
+    #[test]
+    fn test_probe_success_event() {
+        let timeline = Timeline::new();
+        timeline.emit(EventKind::ProbeSuccess {
+            probe_name: "health_check".to_string(),
+            latency_ms: 42,
+            status_code: Some(200),
+        });
+
+        let events = timeline.events();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::ProbeSuccess {
+                probe_name,
+                latency_ms,
+                status_code,
+            } => {
+                assert_eq!(probe_name, "health_check");
+                assert_eq!(*latency_ms, 42);
+                assert_eq!(*status_code, Some(200));
+            }
+            _ => panic!("Expected ProbeSuccess event"),
+        }
+    }
+
+    #[test]
+    fn test_probe_failed_event() {
+        let timeline = Timeline::new();
+        timeline.emit(EventKind::ProbeFailed {
+            probe_name: "liveness".to_string(),
+            error: "Connection refused".to_string(),
+            latency_ms: Some(10),
+        });
+
+        let events = timeline.events();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::ProbeFailed {
+                probe_name,
+                error,
+                latency_ms,
+            } => {
+                assert_eq!(probe_name, "liveness");
+                assert_eq!(error, "Connection refused");
+                assert_eq!(*latency_ms, Some(10));
+            }
+            _ => panic!("Expected ProbeFailed event"),
+        }
+    }
+
+    #[test]
+    fn test_probe_timeout_event() {
+        let timeline = Timeline::new();
+        timeline.emit(EventKind::ProbeTimeout {
+            probe_name: "read_query".to_string(),
+            timeout_ms: 5000,
+        });
+
+        let events = timeline.events();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::ProbeTimeout {
+                probe_name,
+                timeout_ms,
+            } => {
+                assert_eq!(probe_name, "read_query");
+                assert_eq!(*timeout_ms, 5000);
+            }
+            _ => panic!("Expected ProbeTimeout event"),
+        }
+    }
+
+    #[test]
+    fn test_simulation_lifecycle() {
+        let timeline = Timeline::new();
+        timeline.emit(EventKind::SimulationStarted {
+            seed: 12345,
+            duration_secs: 60.0,
+        });
+        timeline.emit(EventKind::SimulationEnded {
+            total_faults: 3,
+            total_failures: 1,
+        });
+
+        let events = timeline.events();
+        assert_eq!(events.len(), 2);
+        match &events[0].kind {
+            EventKind::SimulationStarted { seed, .. } => assert_eq!(*seed, 12345),
+            _ => panic!("Expected SimulationStarted"),
+        }
+        match &events[1].kind {
+            EventKind::SimulationEnded {
+                total_faults,
+                total_failures,
+            } => {
+                assert_eq!(*total_faults, 3);
+                assert_eq!(*total_failures, 1);
+            }
+            _ => panic!("Expected SimulationEnded"),
+        }
+    }
+
+    #[test]
+    fn test_events_have_unique_ids() {
+        let timeline = Timeline::new();
+        for _ in 0..100 {
+            timeline.emit(EventKind::Note {
+                message: "msg".to_string(),
+            });
+        }
+
+        let events = timeline.events();
+        let mut ids = std::collections::HashSet::new();
+        for e in events {
+            assert!(ids.insert(e.id));
+        }
+        assert_eq!(ids.len(), 100);
+    }
+
+    #[test]
+    fn test_elapsed_monotonic() {
+        use std::time::Duration;
+        let timeline = Timeline::new();
+        for _ in 0..5 {
+            timeline.emit(EventKind::Note {
+                message: "step".to_string(),
+            });
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        let events = timeline.events();
+        for i in 0..events.len() - 1 {
+            assert!(events[i].elapsed <= events[i + 1].elapsed);
+        }
+    }
+
+    use proptest::prelude::*;
+
+    fn arb_event_kind() -> impl Strategy<Value = EventKind> {
+        prop_oneof![
+            (any::<u64>(), ".*", ".*").prop_map(|(_, kind, target)| EventKind::FaultInjected {
+                fault_id: Uuid::new_v4(),
+                fault_kind: kind,
+                target,
+                duration_secs: None,
+            }),
+            Just(EventKind::FaultReverted {
+                fault_id: Uuid::new_v4()
+            }),
+            (".*", 0..10000u64).prop_map(|(name, lat)| EventKind::ProbeSuccess {
+                probe_name: name,
+                latency_ms: lat,
+                status_code: Some(200),
+            }),
+            (".*", ".*").prop_map(|(name, err)| EventKind::ProbeFailed {
+                probe_name: name,
+                error: err,
+                latency_ms: Some(100),
+            }),
+            (".*", 0..30000u64).prop_map(|(name, t)| EventKind::ProbeTimeout {
+                probe_name: name,
+                timeout_ms: t,
+            }),
+            ".*".prop_map(|msg| EventKind::Note { message: msg }),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_any_event_kind_emittable(kind in arb_event_kind()) {
+            let timeline = Timeline::new();
+            timeline.emit(kind.clone());
+            let events = timeline.events();
+            assert_eq!(events.len(), 1);
+        }
+
+        #[test]
+        fn proptest_timeline_preserves_all_events(count in 1..200usize) {
+            let timeline = Timeline::new();
+            for _ in 0..count {
+                timeline.emit(EventKind::Note { message: "msg".to_string() });
+            }
+            assert_eq!(timeline.len(), count);
+            assert_eq!(timeline.events().len(), count);
+        }
+
+        #[test]
+        fn proptest_concurrent_emits_never_lose_events(
+            n_threads in 1..50usize,
+            m_events in 1..10usize,
+        ) {
+            let handle = TimelineHandle::new();
+            let mut threads = Vec::new();
+
+            for _ in 0..n_threads {
+                let h = handle.clone();
+                threads.push(std::thread::spawn(move || {
+                    for _ in 0..m_events {
+                        h.emit(EventKind::Note { message: "test".to_string() });
+                    }
+                }));
+            }
+
+            for t in threads {
+                t.join().unwrap();
+            }
+
+            assert_eq!(handle.len(), n_threads * m_events);
+        }
+    }
 }
