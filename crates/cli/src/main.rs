@@ -78,7 +78,7 @@ struct RunArgs {
     #[arg(long)]
     k3d: bool,
 
-    #[arg(long, default_value = "crash,latency", value_delimiter = ',')]
+    #[arg(long, default_value = "crash,latency,partition", value_delimiter = ',')]
     faults: Vec<String>,
 
     /// Method for injecting network faults into pods.
@@ -157,12 +157,16 @@ struct ExploreArgs {
     parallel: usize,
 
     /// Fault types to inject
-    #[arg(long, default_value = "crash,latency", value_delimiter = ',')]
+    #[arg(long, default_value = "crash,latency,partition", value_delimiter = ',')]
     faults: Vec<String>,
 
     /// Method for injecting network faults
     #[arg(long, default_value = "exec", value_enum)]
     inject_method: InjectMethod,
+
+    /// Path to config file with [[properties]] for SLA verification
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -359,6 +363,26 @@ async fn handle_run(args: RunArgs) -> Result<i32> {
                     Err(e) => warn!("  Failed to inject latency: {}", e),
                 }
             }
+            "partition" => {
+                info!("🔌 Injecting network partition on {}", target.name);
+                // Pick a second pod to partition from
+                let other_pods: Vec<_> = ready_pods
+                    .iter()
+                    .filter(|p| p.name != target.name)
+                    .collect();
+                if let Some(other) = other_pods.first() {
+                    let other_ip = other.pod_ip.as_deref().unwrap_or("10.0.0.1");
+                    match fault_op
+                        .inject_partition(&args.namespace, &target.name, other_ip, 20.0)
+                        .await
+                    {
+                        Ok(id) => info!("  Fault {}: {} ↛ {} for 20s", id, target.name, other.name),
+                        Err(e) => warn!("  Failed to inject partition: {}", e),
+                    }
+                } else {
+                    warn!("  Only one pod, skipping partition.");
+                }
+            }
             other => {
                 warn!("Unknown fault type '{}', skipping.", other);
             }
@@ -459,7 +483,11 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
 
     let duration = parse_duration(&args.duration)?;
     let warmup = std::time::Duration::from_secs(10);
-    let faults = vec!["crash".to_string(), "latency".to_string()];
+    let faults = vec![
+        "crash".to_string(),
+        "latency".to_string(),
+        "partition".to_string(),
+    ];
 
     let _result = run_single_simulation(
         &client,
@@ -469,6 +497,7 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
         warmup,
         &faults,
         InjectMethod::Exec,
+        &[],
     )
     .await?;
 
@@ -575,6 +604,8 @@ struct SimulationResult {
     total_probes: usize,
     duration_secs: f64,
     findings: Vec<String>,
+    /// Property verdicts (empty if no properties configured)
+    verdicts: Vec<heisensim_props::PropertyVerdict>,
 }
 
 /// Core simulation loop extracted for reuse by both `run` and `explore`.
@@ -586,6 +617,7 @@ async fn run_single_simulation(
     warmup: std::time::Duration,
     faults: &[String],
     inject_method: InjectMethod,
+    property_defs: &[properties::PropertyDef],
 ) -> Result<SimulationResult> {
     let handle = heisensim_timeline::TimelineHandle::new();
 
@@ -650,6 +682,18 @@ async fn run_single_simulation(
                     .inject_network_latency(namespace, &target.name, delay, jitter, 15.0)
                     .await;
             }
+            "partition" => {
+                let other_pods: Vec<_> = ready_pods
+                    .iter()
+                    .filter(|p| p.name != target.name)
+                    .collect();
+                if let Some(other) = other_pods.first() {
+                    let other_ip = other.pod_ip.as_deref().unwrap_or("10.0.0.1");
+                    let _ = fault_op
+                        .inject_partition(namespace, &target.name, other_ip, 20.0)
+                        .await;
+                }
+            }
             _ => {}
         }
     }
@@ -684,6 +728,14 @@ async fn run_single_simulation(
         }
     }
 
+    // Evaluate properties
+    let verdicts = if !property_defs.is_empty() {
+        let checker = properties::build_checker(property_defs)?;
+        checker.evaluate_all(&events)
+    } else {
+        Vec::new()
+    };
+
     Ok(SimulationResult {
         seed,
         total_faults: summary.total_faults,
@@ -691,6 +743,7 @@ async fn run_single_simulation(
         total_probes,
         duration_secs: duration.as_secs_f64(),
         findings,
+        verdicts,
     })
 }
 
@@ -722,6 +775,20 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     let mut results: Vec<SimulationResult> = Vec::new();
     let mut interesting_seeds: Vec<u64> = Vec::new();
 
+    // Load property definitions from config
+    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
+        config.properties
+    } else {
+        Vec::new()
+    };
+
+    if !property_defs.is_empty() {
+        info!("Loaded {} properties from config.", property_defs.len());
+    }
+
     // Run seeds in batches of `parallel`
     for batch in seeds.chunks(args.parallel) {
         let mut handles = Vec::new();
@@ -730,12 +797,14 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
             let ns = args.namespace.clone();
             let faults = args.faults.clone();
             let method = args.inject_method;
+            let prop_defs = property_defs.clone();
 
             handles.push(tokio::spawn(async move {
                 info!("🔬 Starting seed 0x{:04X}...", seed);
-                let result =
-                    run_single_simulation(&client, &ns, seed, duration, warmup, &faults, method)
-                        .await;
+                let result = run_single_simulation(
+                    &client, &ns, seed, duration, warmup, &faults, method, &prop_defs,
+                )
+                .await;
                 info!("✅ Seed 0x{:04X} complete.", seed);
                 (seed, result)
             }));
@@ -745,18 +814,27 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
             match handle.await {
                 Ok((seed, Ok(result))) => {
                     let has_findings = !result.findings.is_empty();
-                    if has_findings {
+                    let props_failed = result.verdicts.iter().any(|v| !v.passed);
+                    if has_findings || props_failed {
                         interesting_seeds.push(seed);
                     }
 
-                    let icon = if has_findings { "🐛" } else { "✅" };
+                    let icon = if props_failed {
+                        "❌"
+                    } else if has_findings {
+                        "🐛"
+                    } else {
+                        "✅"
+                    };
+                    let props_str = if result.verdicts.is_empty() {
+                        String::new()
+                    } else {
+                        let passed = result.verdicts.iter().filter(|v| v.passed).count();
+                        format!("  │  props: {}/{}", passed, result.verdicts.len())
+                    };
                     println!(
-                        "  {} seed 0x{:04X}  │  faults: {}  │  failures: {}  │  findings: {}",
-                        icon,
-                        seed,
-                        result.total_faults,
-                        result.total_failures,
-                        result.findings.len()
+                        "  {} seed 0x{:04X}  │  faults: {}  │  failures: {}{}",
+                        icon, seed, result.total_faults, result.total_failures, props_str
                     );
 
                     results.push(result);
@@ -785,12 +863,18 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
 
     if !interesting_seeds.is_empty() {
         println!();
-        println!("🐛 Interesting seeds (found fault→failure correlations):");
+        println!("🐛 Interesting seeds (found fault→failure correlations or property violations):");
         for &seed in &interesting_seeds {
             let result = results.iter().find(|r| r.seed == seed).unwrap();
             println!("  seed 0x{:04X}:", seed);
             for finding in &result.findings {
                 println!("    → {}", finding);
+            }
+            for verdict in result.verdicts.iter().filter(|v| !v.passed) {
+                println!(
+                    "    ❌ {}: {} (actual: {})",
+                    verdict.property_name, verdict.expected, verdict.actual
+                );
             }
         }
         println!();
@@ -810,6 +894,13 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
             args.seeds * 2,
             args.duration
         );
+    }
+
+    // Exit code 1 if any seed had property failures
+    let any_prop_failures = results.iter().any(|r| r.verdicts.iter().any(|v| !v.passed));
+    if any_prop_failures {
+        warn!("Some seeds had property failures. Exit code 1.");
+        return Ok(1);
     }
 
     Ok(0)
