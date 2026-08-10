@@ -1,4 +1,3 @@
-use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::WithExportConfig;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -20,7 +19,7 @@ async fn test_otel_shutdown_timeout_does_not_hang() {
     // We expect this to time out because it's trying to connect to a black hole / refused port
     // and wait for batch export. Actually it might return quickly if connection refused, but let's test that it completes.
     // If it blocks forever, the timeout will trigger.
-    let result = timeout(
+    let _result = timeout(
         Duration::from_secs(3),
         tokio::task::spawn_blocking(move || provider.shutdown()),
     )
@@ -52,7 +51,7 @@ async fn test_cli_help_includes_otel_endpoint() {
     // Note: 'cargo run' might build, which can be slow in tests, but it's acceptable for this simple assertion.
     // However, it's faster to run the binary if it's already built. We'll use 'cargo run'.
     let output = std::process::Command::new(env!("CARGO"))
-        .args(&["run", "-p", "heisensim", "--", "run", "--help"])
+        .args(["run", "-p", "heisensim", "--", "run", "--help"])
         .output()
         .expect("Failed to execute cargo run");
 
