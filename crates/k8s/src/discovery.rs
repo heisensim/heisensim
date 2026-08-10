@@ -11,6 +11,7 @@ pub struct PodInfo {
     pub labels: BTreeMap<String, String>,
     pub container_names: Vec<String>,
     pub is_ready: bool,
+    pub pod_ip: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +44,9 @@ pub async fn discover_pods(client: &Client, namespace: &str) -> Result<Vec<PodIn
         }
 
         let mut is_ready = false;
+        let mut pod_ip = None;
         if let Some(status) = &pod.status {
+            pod_ip = status.pod_ip.clone();
             if let Some(conditions) = &status.conditions {
                 is_ready = conditions
                     .iter()
@@ -57,6 +60,7 @@ pub async fn discover_pods(client: &Client, namespace: &str) -> Result<Vec<PodIn
             labels,
             container_names,
             is_ready,
+            pod_ip,
         });
     }
 

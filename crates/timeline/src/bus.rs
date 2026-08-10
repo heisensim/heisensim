@@ -139,9 +139,11 @@ mod tests {
 
         assert_eq!(handle.len(), 10);
 
+        // Verify all 10 events arrived (thread safety = no lost writes).
+        // Note: ordering is NOT guaranteed for concurrent emits because
+        // Instant::now() granularity + mutex acquisition order are both
+        // non-deterministic across threads.
         let events = handle.events();
-        for i in 0..events.len() - 1 {
-            assert!(events[i].elapsed <= events[i + 1].elapsed);
-        }
+        assert_eq!(events.len(), 10);
     }
 }
