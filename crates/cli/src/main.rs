@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+mod properties;
 mod report;
 
 /// ASCII art banner printed on CLI startup.
@@ -182,18 +183,31 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    match cli.command {
+    let exit_code = match cli.command {
         Commands::Run(args) => handle_run(args).await?,
-        Commands::Replay(args) => handle_replay(args).await?,
-        Commands::Init(args) => handle_init(args).await?,
-        Commands::Report(args) => handle_report(args).await?,
+        Commands::Replay(args) => {
+            handle_replay(args).await?;
+            0
+        }
+        Commands::Init(args) => {
+            handle_init(args).await?;
+            0
+        }
+        Commands::Report(args) => {
+            handle_report(args).await?;
+            0
+        }
         Commands::Explore(args) => handle_explore(args).await?,
+    };
+
+    if exit_code != 0 {
+        std::process::exit(exit_code);
     }
 
     Ok(())
 }
 
-async fn handle_run(args: RunArgs) -> Result<()> {
+async fn handle_run(args: RunArgs) -> Result<i32> {
     let seed = args.seed.unwrap_or_else(|| rand::rng().random());
     println!("Config Summary:");
     println!("  Namespace: {}", args.namespace);
@@ -375,6 +389,22 @@ async fn handle_run(args: RunArgs) -> Result<()> {
     std::fs::write(&json_path, &json)?;
     info!("Timeline saved to {}", json_path);
 
+    // Property checking
+    let mut exit_code = 0;
+    if let Some(ref config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
+        if !config.properties.is_empty() {
+            info!("Evaluating {} properties...", config.properties.len());
+            let all_passed = properties::check_properties(&config.properties, &final_events)?;
+            if !all_passed {
+                warn!("Some properties FAILED. Exit code 1.");
+                exit_code = 1;
+            }
+        }
+    }
+
     // Cleanup K3d if we created it
     if args.k3d {
         let cluster_name = format!("heisensim-{:04x}", seed & 0xFFFF);
@@ -383,7 +413,7 @@ async fn handle_run(args: RunArgs) -> Result<()> {
         cluster.delete().await?;
     }
 
-    Ok(())
+    Ok(exit_code)
 }
 
 /// Parse a duration string like "30s", "2m", "1h" into std::time::Duration
@@ -664,7 +694,7 @@ async fn run_single_simulation(
     })
 }
 
-async fn handle_explore(args: ExploreArgs) -> Result<()> {
+async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
     let seeds: Vec<u64> = (args.start_seed..args.start_seed + args.seeds).collect();
@@ -782,5 +812,5 @@ async fn handle_explore(args: ExploreArgs) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(0)
 }

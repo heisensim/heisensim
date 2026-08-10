@@ -17,6 +17,7 @@ heisensim-timeline.workspace = true
 heisensim-probe.workspace = true
 heisensim-k8s.workspace = true
 heisensim-fault.workspace = true
+heisensim-props.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

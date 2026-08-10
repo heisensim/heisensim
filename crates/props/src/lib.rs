@@ -2,24 +2,40 @@
 //!
 //! Property checking framework for heisensim simulations.
 //!
-//! Properties are invariants that must hold throughout a simulation run.
-//! When a property is violated, heisensim records the exact seed and fault
-//! schedule that triggered the violation, enabling perfect reproduction.
+//! ## Timeline Properties (K8s chaos tests)
 //!
-//! ## Built-in Properties
+//! The [`TimelineProperty`](timeline::TimelineProperty) trait evaluates invariants
+//! against `Vec<TimelineEvent>` from real chaos tests:
 //!
-//! - **NoCrash**: No process should crash unexpectedly
-//! - **NoHang**: All processes should make progress (no deadlocks/livelocks)
-//! - **NoDataLoss**: Acknowledged writes must be readable after recovery
-//! - **Linearizable**: Operations must appear to execute atomically
+//! - [`RecoveryTime`](recovery::RecoveryTime) — probes recover within N seconds after fault
+//! - [`Availability`](availability::Availability) — probe success rate ≥ N%
+//! - [`ErrorBudget`](error_budget::ErrorBudget) — max consecutive failures per probe
+//! - [`NoCascade`](cascade::NoCascade) — faults don't cause unexpected probe failures
+//! - [`LatencyThreshold`](latency::LatencyThreshold) — probe latency pNN stays under threshold
 //!
-//! ## Custom Properties
+//! ## Simulation Properties (future)
 //!
-//! Implement the [`Property`] trait to define custom invariants.
+//! The [`Property`](checker::Property) trait evaluates invariants against
+//! `SimulationSnapshot` for deterministic simulation testing.
 
+pub mod availability;
 pub mod builtin;
+pub mod cascade;
 pub mod checker;
+pub mod error_budget;
+pub mod latency;
+pub mod recovery;
+pub mod timeline;
 
+// Timeline properties (primary API for K8s chaos)
+pub use availability::Availability;
+pub use cascade::NoCascade;
+pub use error_budget::ErrorBudget;
+pub use latency::LatencyThreshold;
+pub use recovery::RecoveryTime;
+pub use timeline::{PropertyVerdict, TimelineChecker, TimelineProperty};
+
+// Simulation properties (existing)
 pub use checker::{
     ProcessInfo, Property, PropertyChecker, PropertyResult, Severity, SimulationSnapshot,
 };

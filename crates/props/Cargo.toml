@@ -9,7 +9,12 @@ repository.workspace = true
 
 [dependencies]
 heisensim-core.workspace = true
+heisensim-timeline.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+uuid.workspace = true
