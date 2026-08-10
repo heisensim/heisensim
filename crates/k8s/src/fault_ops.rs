@@ -9,16 +9,41 @@ use std::time::Duration;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+/// Method for injecting network faults into pods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectMethod {
+    /// Execute commands directly in the target container.
+    /// Requires tc/iptables to be installed in the container image.
+    Exec,
+    /// Use `kubectl debug` to inject an ephemeral container with `nicolaka/netshoot`.
+    /// Works with any image — the debug container shares the pod's network namespace.
+    Debug,
+}
+
 /// Handles fault injection operations against Kubernetes pods.
 pub struct FaultOperator {
     client: Client,
     timeline: TimelineHandle,
+    inject_method: InjectMethod,
 }
 
 impl FaultOperator {
     /// Create a new fault operator.
     pub fn new(client: Client, timeline: TimelineHandle) -> Self {
-        Self { client, timeline }
+        Self {
+            client,
+            timeline,
+            inject_method: InjectMethod::Exec,
+        }
+    }
+
+    /// Create a new fault operator with the specified injection method.
+    pub fn with_method(client: Client, timeline: TimelineHandle, method: InjectMethod) -> Self {
+        Self {
+            client,
+            timeline,
+            inject_method: method,
+        }
     }
 
     /// Inject a pod crash by deleting the pod.
@@ -41,18 +66,38 @@ impl FaultOperator {
         Ok(fault_id)
     }
 
-    /// Execute a command inside a pod using `kubectl exec` via tokio::process.
+    /// Execute a network command on a pod, dispatching based on the inject method.
     ///
-    /// We use the kubectl CLI rather than the kube-rs exec API because the
-    /// latter requires websocket support and complex stream handling.
-    /// For chaos testing, shelling out to kubectl is simpler and more robust.
-    pub async fn exec_in_pod(
+    /// - `Exec`: Runs the command directly inside the target container.
+    ///   Requires tc/iptables to be installed in the container image.
+    /// - `Debug`: Uses `kubectl debug` to create an ephemeral container with
+    ///   `nicolaka/netshoot`, which shares the target pod's network namespace.
+    ///   Works with any image (including minimal Alpine images).
+    pub async fn exec_network_command(
         &self,
         namespace: &str,
         pod_name: &str,
         command: &[&str],
     ) -> Result<String> {
-        info!(pod = pod_name, cmd = ?command, "Executing command in pod");
+        match self.inject_method {
+            InjectMethod::Exec => self.exec_in_pod(namespace, pod_name, command).await,
+            InjectMethod::Debug => {
+                self.exec_via_debug_container(namespace, pod_name, command)
+                    .await
+            }
+        }
+    }
+
+    /// Execute a command inside a pod using `kubectl exec` via tokio::process.
+    ///
+    /// Requires tc/iptables to be installed in the target container image.
+    async fn exec_in_pod(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        command: &[&str],
+    ) -> Result<String> {
+        info!(pod = pod_name, cmd = ?command, method = "exec", "Executing command in pod");
 
         let output = tokio::process::Command::new("kubectl")
             .args(["exec", "-n", namespace, pod_name, "--"])
@@ -76,6 +121,66 @@ impl FaultOperator {
         Ok(stdout)
     }
 
+    /// Execute a command via an ephemeral debug container using `kubectl debug`.
+    ///
+    /// This creates a temporary container using `nicolaka/netshoot` that shares
+    /// the target pod's network namespace. The container runs the specified
+    /// command and then exits. This is ideal for pods whose images don't include
+    /// networking tools like tc or iptables.
+    ///
+    /// Requires Kubernetes 1.25+ (ephemeral containers GA).
+    async fn exec_via_debug_container(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        command: &[&str],
+    ) -> Result<String> {
+        let debug_name = format!("heisensim-{}", &Uuid::new_v4().to_string()[..8]);
+        let cmd_str = command.join(" ");
+
+        info!(
+            pod = pod_name,
+            debug_container = debug_name.as_str(),
+            cmd = cmd_str.as_str(),
+            method = "debug",
+            "Executing via ephemeral debug container"
+        );
+
+        let output = tokio::process::Command::new("kubectl")
+            .args([
+                "debug",
+                "-n",
+                namespace,
+                pod_name,
+                "--image=nicolaka/netshoot:latest",
+                &format!("--container={}", debug_name),
+                "--target=", // share network namespace with first container
+                "--",
+            ])
+            .args(command)
+            .output()
+            .await
+            .context("Failed to run kubectl debug")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if !output.status.success() {
+            warn!(
+                pod = pod_name,
+                stderr = stderr.as_str(),
+                "kubectl debug failed"
+            );
+        }
+
+        info!(
+            pod = pod_name,
+            stdout = stdout.as_str(),
+            "Debug container output"
+        );
+        Ok(stdout)
+    }
+
     /// Inject network latency on a pod's eth0 interface using tc netem.
     pub async fn inject_network_latency(
         &self,
@@ -89,7 +194,7 @@ impl FaultOperator {
 
         let delay_arg = format!("{}ms", delay_ms);
         let jitter_arg = format!("{}ms", jitter_ms);
-        self.exec_in_pod(
+        self.exec_network_command(
             namespace,
             pod_name,
             &[
@@ -120,10 +225,12 @@ impl FaultOperator {
         let ns = namespace.to_string();
         let pn = pod_name.to_string();
 
+        let inject_method = self.inject_method;
+
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs_f64(duration_secs)).await;
 
-            let op = FaultOperator::new(client_clone, timeline_clone);
+            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
             if let Err(e) = op.revert_network_latency(&ns, &pn, fault_id).await {
                 warn!(pod = pn.as_str(), error = %e, "Failed to revert network latency");
             }
@@ -139,7 +246,7 @@ impl FaultOperator {
         pod_name: &str,
         fault_id: Uuid,
     ) -> Result<()> {
-        self.exec_in_pod(
+        self.exec_network_command(
             namespace,
             pod_name,
             &["tc", "qdisc", "del", "dev", "eth0", "root"],
@@ -161,7 +268,7 @@ impl FaultOperator {
     ) -> Result<Uuid> {
         let fault_id = Uuid::new_v4();
 
-        self.exec_in_pod(
+        self.exec_network_command(
             namespace,
             pod_a,
             &["iptables", "-A", "OUTPUT", "-d", pod_b_ip, "-j", "DROP"],
@@ -182,10 +289,12 @@ impl FaultOperator {
         let pa = pod_a.to_string();
         let pip = pod_b_ip.to_string();
 
+        let inject_method = self.inject_method;
+
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs_f64(duration_secs)).await;
 
-            let op = FaultOperator::new(client_clone, timeline_clone);
+            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
             if let Err(e) = op.revert_partition(&ns, &pa, &pip, fault_id).await {
                 warn!(pod = pa.as_str(), error = %e, "Failed to revert partition");
             }
@@ -202,7 +311,7 @@ impl FaultOperator {
         target_ip: &str,
         fault_id: Uuid,
     ) -> Result<()> {
-        self.exec_in_pod(
+        self.exec_network_command(
             namespace,
             pod_name,
             &["iptables", "-D", "OUTPUT", "-d", target_ip, "-j", "DROP"],
