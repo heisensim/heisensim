@@ -35,7 +35,59 @@ impl Timeline {
             kind: kind.clone(),
         };
 
-        tracing::debug!(?event, "Emitting timeline event");
+        // Structured tracing that bridges to OTel spans/events
+        match &event.kind {
+            EventKind::FaultInjected {
+                fault_id,
+                fault_kind,
+                target,
+                ..
+            } => {
+                tracing::info!(
+                    fault.id = %fault_id,
+                    fault.kind = %fault_kind,
+                    fault.target = %target,
+                    "fault.injected"
+                );
+            }
+            EventKind::FaultReverted { fault_id } => {
+                tracing::info!(fault.id = %fault_id, "fault.reverted");
+            }
+            EventKind::ProbeSuccess {
+                probe_name,
+                latency_ms,
+                status_code,
+            } => {
+                tracing::debug!(
+                    probe.name = %probe_name,
+                    probe.latency_ms = latency_ms,
+                    http.status_code = ?status_code,
+                    "probe.success"
+                );
+            }
+            EventKind::ProbeFailed {
+                probe_name, error, ..
+            } => {
+                tracing::warn!(
+                    probe.name = %probe_name,
+                    error = %error,
+                    "probe.failed"
+                );
+            }
+            EventKind::ProbeTimeout {
+                probe_name,
+                timeout_ms,
+            } => {
+                tracing::warn!(
+                    probe.name = %probe_name,
+                    probe.timeout_ms = timeout_ms,
+                    "probe.timeout"
+                );
+            }
+            _ => {
+                tracing::debug!(?event, "timeline.event");
+            }
+        }
 
         let mut events = self.events.write().expect("Timeline lock poisoned");
         events.push(event);

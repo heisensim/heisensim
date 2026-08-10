@@ -1,6 +1,9 @@
 use crate::config::{HttpMethod, HttpProbeConfig};
+use opentelemetry::global;
 use reqwest::{Client, Method};
 use std::time::{Duration, Instant};
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// The result of executing a health probe.
 #[derive(Debug, Clone)]
@@ -17,6 +20,17 @@ pub struct ProbeResult {
 
 /// Executes an HTTP health probe.
 pub async fn check_http(config: &HttpProbeConfig) -> ProbeResult {
+    check_http_inner(config)
+        .instrument(tracing::info_span!(
+            "probe.http",
+            probe.name = %config.name,
+            http.url = %config.url,
+            http.method = ?config.method,
+        ))
+        .await
+}
+
+async fn check_http_inner(config: &HttpProbeConfig) -> ProbeResult {
     let start = Instant::now();
     let timeout = Duration::from_millis(config.timeout_ms);
 
@@ -42,6 +56,19 @@ pub async fn check_http(config: &HttpProbeConfig) -> ProbeResult {
     if let Some(headers) = &config.headers {
         for (k, v) in headers {
             req = req.header(k, v);
+        }
+    }
+
+    let cx = tracing::Span::current().context();
+    let mut injector_headers = std::collections::HashMap::new();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut injector_headers);
+    });
+    for (key, value) in &injector_headers {
+        if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
+            if let Ok(header_value) = reqwest::header::HeaderValue::from_str(value) {
+                req = req.header(header_name, header_value);
+            }
         }
     }
 
