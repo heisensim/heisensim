@@ -12,13 +12,13 @@ homepage = "https://heisensim.dev"
 authors = ["Heisensim Contributors"]
 
 [workspace.dependencies]
-heisensim-core = { path = "crates/core" }
-heisensim-intercept = { path = "crates/intercept" }
-heisensim-fault = { path = "crates/fault" }
-heisensim-props = { path = "crates/props" }
-heisensim-timeline = { path = "crates/timeline" }
-heisensim-probe = { path = "crates/probe" }
-heisensim-k8s = { path = "crates/k8s" }
+heisensim-core = { version = "0.1.0", path = "crates/core" }
+heisensim-intercept = { version = "0.1.0", path = "crates/intercept" }
+heisensim-fault = { version = "0.1.0", path = "crates/fault" }
+heisensim-props = { version = "0.1.0", path = "crates/props" }
+heisensim-timeline = { version = "0.1.0", path = "crates/timeline" }
+heisensim-probe = { version = "0.1.0", path = "crates/probe" }
+heisensim-k8s = { version = "0.1.0", path = "crates/k8s" }
 
 # External dependencies (pinned versions)
 anyhow = "1"
