@@ -1,0 +1,42 @@
+name: Chaos Test
+on:
+  # Run on demand, or nightly
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'  # 4 AM UTC daily
+
+jobs:
+  chaos-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install heisensim
+        run: |
+          curl -fsSL https://github.com/heisensim/heisensim/releases/latest/download/heisensim-v0.2.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv heisensim /usr/local/bin/
+
+      - name: Create k3d cluster
+        uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: chaos-test
+          args: --agents 2
+
+      - name: Deploy app
+        run: |
+          kubectl apply -f manifests.yaml
+          kubectl wait --for=condition=ready pod --all -n heisensim-demo --timeout=120s
+
+      - name: Run chaos test
+        run: |
+          heisensim explore \
+            --namespace heisensim-demo \
+            --seeds 5 \
+            --duration 30s \
+            --warmup 10s \
+            --faults crash,latency,partition \
+            --config heisensim.toml
+
+      - name: Cleanup
+        if: always()
+        run: k3d cluster delete chaos-test

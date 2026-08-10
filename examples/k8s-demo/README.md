@@ -1,59 +1,103 @@
-# Heisensim Demo: nginx + Redis on K3d
+# heisensim E2E Demo
 
-A simple 2-service app to demonstrate heisensim's K8s chaos testing.
+Chaos test a multi-service Kubernetes app in under 5 minutes.
 
-## Architecture
+## What's in the box
 
-```
-┌──────────┐     ┌──────────┐
-│  nginx   │────▶│  redis   │
-│  (api)   │     │          │
-│  :80     │     │  :6379   │
-└──────────┘     └──────────┘
-   2 replicas      1 replica
-   HTTP probes     TCP + exec probes
-```
+| Component | Image | Replicas | Health Probes |
+|:---|:---|:---:|:---|
+| **api** | nginx:1.27-alpine | 2 | HTTP GET / (readiness + liveness) |
+| **redis** | redis:7-alpine | 1 | TCP 6379 (readiness) + `redis-cli ping` (liveness) |
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) running
-- [k3d](https://k3d.io/) (`brew install k3d`)
+- [heisensim](https://heisensim.dev) (`brew install heisensim/tap/heisensim`)
+- [k3d](https://k3d.io) (`brew install k3d`)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- heisensim (`cargo install --path crates/cli`)
 
 ## Quick Start
 
 ```bash
-# 1. Create a K3d cluster
-k3d cluster create heisensim-demo --wait
-
-# 2. Deploy the demo app
-kubectl apply -f examples/k8s-demo/manifests.yaml
-
-# 3. Wait for pods
-kubectl wait --for=condition=Ready pods --all -n heisensim-demo --timeout=60s
-
-# 4. Run heisensim — auto-discovers probes, injects faults
-heisensim run --namespace heisensim-demo --seed 42 --duration 2m
-
-# 5. Replay the exact same run (same seed = same faults)
-heisensim replay --seed 42 --namespace heisensim-demo --duration 2m
-
-# 6. Clean up
-k3d cluster delete heisensim-demo
+# Clone and run the demo
+git clone https://github.com/heisensim/heisensim.git
+cd heisensim/examples/k8s-demo
+make all
 ```
 
-## What Happens
+That's it. `make all` will:
+1. Create a k3d cluster with 2 agent nodes
+2. Deploy the demo app (redis + 2× nginx)
+3. Wait for all pods to be healthy
+4. Run a 2-minute chaos test with seed 42
 
-1. **Discovery**: heisensim finds 2 deployments (api, redis) and auto-scrapes their K8s probe specs
-2. **Probing**: HTTP probes hit nginx on `:80/`, TCP probes check redis on `:6379`, exec probe runs `redis-cli ping`
-3. **Fault injection**: On a seeded schedule, heisensim randomly:
-   - Crashes pods (`kubectl delete pod`)
-   - Injects latency (`tc netem delay 300ms`)
-4. **Reporting**: Timeline shows exactly when faults were injected and when probes detected failures
+## What You'll See
 
-## Notes
+### Fault Injection
+heisensim automatically discovers pods and health probes, then injects:
+- 💥 **Pod crashes** — deletes a running pod
+- 🌐 **Network latency** — adds 200-700ms delay
+- 🔌 **Network partitions** — iptables DROP between pods
 
-- Pods have `NET_ADMIN` capability — required for `tc`/`iptables` fault injection
-- The `--seed 42` flag makes the run deterministic — same faults, same order, same timing
-- Use `heisensim init --namespace heisensim-demo` to generate a config file from the running cluster
+### Property Verification
+After faults, heisensim evaluates 5 SLA properties:
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║  PROPERTY RESULTS                              4/5 PASS     ║
+╠═══════════════════════════════════════════════════════════════╣
+║  ✅ PASS  fast-recovery      recovery < 30s (actual: 8.2s)  ║
+║  ✅ PASS  high-availability  avail ≥ 95% (actual: 97.1%)    ║
+║  ✅ PASS  bounded-errors     max 5 consecutive (actual: 2)  ║
+║  ✅ PASS  no-cascade         no cascading failures           ║
+║  ✅ PASS  low-latency        p99 < 500ms (actual: 230ms)    ║
+╚═══════════════════════════════════════════════════════════════╝
+```
+
+## Explore Mode
+
+Run many seeds to find edge cases:
+
+```bash
+make explore
+```
+
+This runs 10 different random seeds, each with different fault timing:
+
+```
+  ✅ seed 0x0001  │  faults: 3  │  failures: 1  │  props: 5/5
+  ❌ seed 0x0002  │  faults: 4  │  failures: 8  │  props: 3/5
+  ✅ seed 0x0003  │  faults: 2  │  failures: 0  │  props: 5/5
+```
+
+## Replay a Bug
+
+Found an interesting seed? Replay it deterministically:
+
+```bash
+heisensim run --namespace heisensim-demo --seed 0x0002 --duration 30s
+```
+
+Same seed → same faults → same results. Every time.
+
+## Configuration
+
+See [`heisensim.toml`](heisensim.toml) for the property definitions. Edit thresholds to see how your SLAs hold up:
+
+```toml
+[[properties]]
+name = "fast-recovery"
+type = "recovery_time"
+max_seconds = 30   # ← try 10 to see it fail
+```
+
+## Clean Up
+
+```bash
+make clean
+```
+
+## Next Steps
+
+- Try it on your own namespace: `heisensim run --namespace your-app`
+- Add stricter properties to `heisensim.toml`
+- Run in CI: `heisensim explore --config heisensim.toml` exits 1 on failure
