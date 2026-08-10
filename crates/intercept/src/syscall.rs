@@ -1,4 +1,5 @@
-/// Syscall definitions and variants for intercepted syscalls.
+//! Syscall definitions and variants for intercepted syscalls.
+#![allow(dead_code)]
 
 /// Represents a system call that has been intercepted by the tracing engine.
 #[derive(Debug, Clone, PartialEq, Eq)]

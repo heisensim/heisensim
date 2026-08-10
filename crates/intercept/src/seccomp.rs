@@ -1,3 +1,4 @@
+#![allow(dead_code, clippy::new_without_default)]
 /// Seccomp-BPF filter for efficient syscall interception.
 use anyhow::Result;
 use std::os::unix::io::RawFd;

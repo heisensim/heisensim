@@ -1,3 +1,4 @@
+#![allow(dead_code, clippy::new_without_default)]
 use crate::syscall::{InterceptedSyscall, SyscallResult};
 /// Ptrace-based execution tracer.
 use anyhow::Result;
@@ -18,7 +19,7 @@ impl PtraceTracer {
     }
 
     /// Attach the tracer to a target process by PID.
-    pub fn trace_process(&mut self, pid: Pid) -> Result<()> {
+    pub fn trace_process(&mut self, _pid: Pid) -> Result<()> {
         todo!("Implement ptrace attach")
     }
 
@@ -28,7 +29,7 @@ impl PtraceTracer {
     }
 
     /// Inject the result of a syscall back into the process, modifying registers if needed.
-    pub fn set_result(&mut self, result: SyscallResult) -> Result<()> {
+    pub fn set_result(&mut self, _result: SyscallResult) -> Result<()> {
         todo!("Implement register modification for syscall replacement")
     }
 }
