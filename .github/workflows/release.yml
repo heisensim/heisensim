@@ -99,3 +99,26 @@ jobs:
               --title "Release $TAG" \
               --generate-notes
           fi
+
+  publish:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish crates (dependency order)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -e
+          # Publish in dependency order, waiting for each to be available
+          for crate in heisensim-core heisensim-timeline heisensim-intercept heisensim-fault heisensim-probe heisensim-props heisensim-k8s heisensim; do
+            echo "📦 Publishing $crate..."
+            cargo publish -p "$crate" || echo "⚠️  $crate already published or failed"
+            sleep 10  # Wait for crates.io index to update
+          done
