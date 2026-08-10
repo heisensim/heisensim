@@ -13,7 +13,7 @@ jobs:
 
       - name: Install heisensim
         run: |
-          curl -fsSL https://github.com/heisensim/heisensim/releases/latest/download/heisensim-v0.2.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          curl -fsSL https://github.com/heisensim/heisensim/releases/latest/download/heisensim-v0.3.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
           sudo mv heisensim /usr/local/bin/
 
       - name: Create k3d cluster
