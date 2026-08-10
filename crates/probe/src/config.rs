@@ -53,12 +53,19 @@ pub struct GrpcProbeConfig {
 }
 
 /// Configuration for an Exec health probe.
+///
+/// Exec probes run a command inside a Kubernetes pod using `kubectl exec`.
+/// The probe succeeds if the command exits with code 0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecProbeConfig {
     pub name: String,
     pub command: Vec<String>,
     pub timeout_ms: u64,
     pub interval_ms: u64,
+    /// Pod name for kubectl exec (set by probe scraper).
+    pub pod_name: String,
+    /// Namespace for kubectl exec (set by probe scraper).
+    pub namespace: String,
 }
 
 impl ProbeConfig {

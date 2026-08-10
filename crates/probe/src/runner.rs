@@ -1,11 +1,12 @@
 use crate::config::ProbeConfig;
+use crate::exec::check_exec;
 use crate::grpc::check_grpc;
 use crate::http::check_http;
 use crate::tcp::check_tcp;
 use heisensim_timeline::{EventKind, TimelineHandle};
 use tokio::sync::watch;
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Orchestrates the execution of multiple health probes.
 pub struct ProbeRunner {
@@ -42,10 +43,7 @@ impl ProbeRunner {
                                 ProbeConfig::Http(c) => check_http(c).await,
                                 ProbeConfig::Tcp(c) => check_tcp(c).await,
                                 ProbeConfig::Grpc(c) => check_grpc(c).await,
-                                ProbeConfig::Exec(_) => {
-                                    warn!("Exec probe not yet implemented: {}", name);
-                                    continue;
-                                }
+                                ProbeConfig::Exec(c) => check_exec(c).await,
                             };
 
                             let event_kind = if result.success {
