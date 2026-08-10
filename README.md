@@ -59,21 +59,26 @@ Download from [GitHub Releases](https://github.com/heisensim/heisensim/releases)
 ## 🚀 Quick Start
 
 ```bash
-# Create a cluster and deploy your app
-k3d cluster create demo --wait
-kubectl apply -f examples/k8s-demo/manifests.yaml
+git clone https://github.com/heisensim/heisensim.git
+cd heisensim/examples/k8s-demo
+make all   # creates k3d cluster → deploys app → runs chaos test
+```
 
-# Auto-discover probes and generate config
-heisensim init --namespace heisensim-demo
+Or step by step:
 
-# Run chaos test with property checking
+```bash
+# Single chaos test with property checking
 heisensim run --namespace heisensim-demo --seed 42 --duration 2m --config heisensim.toml
+
+# Explore 10 seeds in parallel
+heisensim explore --namespace heisensim-demo --seeds 10 --duration 30s --config heisensim.toml
 
 # Replay exact same run
 heisensim replay --seed 42 --namespace heisensim-demo --duration 2m
 ```
 
----
+> 📖 See the full [E2E demo guide](examples/k8s-demo/) for the complete walkthrough.
+
 
 ## 🛡️ Property Checking
 
