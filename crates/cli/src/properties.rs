@@ -7,7 +7,6 @@ use heisensim_props::{
     Availability, ErrorBudget, LatencyThreshold, NoCascade, PropertyVerdict, RecoveryTime,
     TimelineChecker, TimelineProperty,
 };
-use heisensim_timeline::event::TimelineEvent;
 use serde::Deserialize;
 
 /// A property definition from TOML config.
@@ -145,18 +144,4 @@ pub fn print_verdicts(verdicts: &[PropertyVerdict]) {
         }
     }
     println!();
-}
-
-/// Run property checking against timeline events and print results.
-/// Returns true if all properties passed.
-pub fn check_properties(defs: &[PropertyDef], events: &[TimelineEvent]) -> Result<bool> {
-    if defs.is_empty() {
-        return Ok(true);
-    }
-
-    let checker = build_checker(defs)?;
-    let verdicts = checker.evaluate_all(events);
-    print_verdicts(&verdicts);
-
-    Ok(verdicts.iter().all(|v| v.passed))
 }

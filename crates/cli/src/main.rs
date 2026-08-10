@@ -86,6 +86,10 @@ struct RunArgs {
     /// 'debug' uses kubectl debug ephemeral containers with netshoot (works with any image).
     #[arg(long, default_value = "exec", value_enum)]
     inject_method: InjectMethod,
+
+    /// Output format: text (default) or json
+    #[arg(long, default_value = "text")]
+    output: OutputFormat,
 }
 
 /// Method for injecting network faults into pods.
@@ -93,8 +97,17 @@ struct RunArgs {
 enum InjectMethod {
     /// Execute commands directly in the target container (requires tc/iptables)
     Exec,
-    /// Use kubectl debug ephemeral containers with netshoot image
+    /// Use kubectl debug ephemeral container with netshoot
     Debug,
+}
+
+/// Output format for results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    /// Human-readable terminal output
+    Text,
+    /// Machine-readable JSON (for CI pipelines)
+    Json,
 }
 
 #[derive(Args, Debug)]
@@ -167,6 +180,10 @@ struct ExploreArgs {
     /// Path to config file with [[properties]] for SLA verification
     #[arg(long)]
     config: Option<PathBuf>,
+
+    /// Output format: text (default) or json
+    #[arg(long, default_value = "text")]
+    output: OutputFormat,
 }
 
 #[tokio::main]
@@ -415,18 +432,38 @@ async fn handle_run(args: RunArgs) -> Result<i32> {
 
     // Property checking
     let mut exit_code = 0;
+    let mut verdicts = Vec::new();
     if let Some(ref config_path) = args.config {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
         let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
         if !config.properties.is_empty() {
             info!("Evaluating {} properties...", config.properties.len());
-            let all_passed = properties::check_properties(&config.properties, &final_events)?;
+            let checker = properties::build_checker(&config.properties)?;
+            verdicts = checker.evaluate_all(&final_events);
+            let all_passed = verdicts.iter().all(|v| v.passed);
+            if args.output == OutputFormat::Text {
+                properties::print_verdicts(&verdicts);
+            }
             if !all_passed {
                 warn!("Some properties FAILED. Exit code 1.");
                 exit_code = 1;
             }
         }
+    }
+
+    // JSON output
+    if args.output == OutputFormat::Json {
+        let summary = heisensim_timeline::query::summary(&final_events);
+        let output = serde_json::json!({
+            "seed": seed,
+            "duration_secs": duration.as_secs_f64(),
+            "total_faults": summary.total_faults,
+            "total_failures": summary.total_failures,
+            "properties": verdicts,
+            "passed": exit_code == 0,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
     }
 
     // Cleanup K3d if we created it
@@ -752,20 +789,22 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     let warmup = parse_duration(&args.warmup)?;
     let seeds: Vec<u64> = (args.start_seed..args.start_seed + args.seeds).collect();
 
-    println!("╔══════════════════════════════════════════════════════════════╗");
-    println!(
-        "║  HEISENSIM EXPLORE                    {} seeds, {}s each   ║",
-        args.seeds,
-        duration.as_secs()
-    );
-    println!("╠══════════════════════════════════════════════════════════════╣");
-    println!(
-        "║  Namespace: {:16} │  Faults: {:20} ║",
-        args.namespace,
-        args.faults.join(",")
-    );
-    println!("╚══════════════════════════════════════════════════════════════╝");
-    println!();
+    if args.output == OutputFormat::Text {
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!(
+            "║  HEISENSIM EXPLORE                    {} seeds, {}s each   ║",
+            args.seeds,
+            duration.as_secs()
+        );
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!(
+            "║  Namespace: {:16} │  Faults: {:20} ║",
+            args.namespace,
+            args.faults.join(",")
+        );
+        println!("╚══════════════════════════════════════════════════════════════╝");
+        println!();
+    }
 
     // Connect once, reuse client
     let client = kube::Client::try_default()
@@ -898,6 +937,31 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
 
     // Exit code 1 if any seed had property failures
     let any_prop_failures = results.iter().any(|r| r.verdicts.iter().any(|v| !v.passed));
+
+    if args.output == OutputFormat::Json {
+        let json_results: Vec<_> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "seed": r.seed,
+                    "total_faults": r.total_faults,
+                    "total_failures": r.total_failures,
+                    "duration_secs": r.duration_secs,
+                    "findings": r.findings,
+                    "properties": r.verdicts,
+                    "passed": r.verdicts.iter().all(|v| v.passed),
+                })
+            })
+            .collect();
+        let output = serde_json::json!({
+            "seeds_tested": results.len(),
+            "interesting_seeds": interesting_seeds,
+            "all_passed": !any_prop_failures,
+            "results": json_results,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+
     if any_prop_failures {
         warn!("Some seeds had property failures. Exit code 1.");
         return Ok(1);
