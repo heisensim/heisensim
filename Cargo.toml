@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0 OR MIT"
@@ -12,13 +12,13 @@ homepage = "https://heisensim.dev"
 authors = ["Heisensim Contributors"]
 
 [workspace.dependencies]
-heisensim-core = { version = "0.1.1", path = "crates/core" }
-heisensim-intercept = { version = "0.1.1", path = "crates/intercept" }
-heisensim-fault = { version = "0.1.1", path = "crates/fault" }
-heisensim-props = { version = "0.1.1", path = "crates/props" }
-heisensim-timeline = { version = "0.1.1", path = "crates/timeline" }
-heisensim-probe = { version = "0.1.1", path = "crates/probe" }
-heisensim-k8s = { version = "0.1.1", path = "crates/k8s" }
+heisensim-core = { version = "0.2.0", path = "crates/core" }
+heisensim-intercept = { version = "0.2.0", path = "crates/intercept" }
+heisensim-fault = { version = "0.2.0", path = "crates/fault" }
+heisensim-props = { version = "0.2.0", path = "crates/props" }
+heisensim-timeline = { version = "0.2.0", path = "crates/timeline" }
+heisensim-probe = { version = "0.2.0", path = "crates/probe" }
+heisensim-k8s = { version = "0.2.0", path = "crates/k8s" }
 
 # External dependencies (pinned versions)
 anyhow = "1"
