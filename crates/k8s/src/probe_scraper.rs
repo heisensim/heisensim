@@ -32,9 +32,15 @@ pub async fn scrape_probes(client: &Client, namespace: &str) -> Result<Vec<Probe
                 let interval_ms = (probe.period_seconds.unwrap_or(10) as u64) * 1000;
                 let timeout_ms = (probe.timeout_seconds.unwrap_or(5) as u64) * 1000;
 
-                if let Some(config) =
-                    convert_probe(probe, &name_prefix, pod_ip, interval_ms, timeout_ms)
-                {
+                if let Some(config) = convert_probe(
+                    probe,
+                    &name_prefix,
+                    pod_ip,
+                    pod_name,
+                    namespace,
+                    interval_ms,
+                    timeout_ms,
+                ) {
                     configs.push(config);
                 }
             }
@@ -45,9 +51,15 @@ pub async fn scrape_probes(client: &Client, namespace: &str) -> Result<Vec<Probe
                 let interval_ms = (probe.period_seconds.unwrap_or(10) as u64) * 1000;
                 let timeout_ms = (probe.timeout_seconds.unwrap_or(5) as u64) * 1000;
 
-                if let Some(config) =
-                    convert_probe(probe, &name_prefix, pod_ip, interval_ms, timeout_ms)
-                {
+                if let Some(config) = convert_probe(
+                    probe,
+                    &name_prefix,
+                    pod_ip,
+                    pod_name,
+                    namespace,
+                    interval_ms,
+                    timeout_ms,
+                ) {
                     configs.push(config);
                 }
             }
@@ -62,6 +74,8 @@ fn convert_probe(
     probe: &k8s_openapi::api::core::v1::Probe,
     name: &str,
     pod_ip: &str,
+    pod_name: &str,
+    namespace: &str,
     interval_ms: u64,
     timeout_ms: u64,
 ) -> Option<ProbeConfig> {
@@ -115,6 +129,8 @@ fn convert_probe(
                 command: exec_action.command.clone().unwrap_or_default(),
                 timeout_ms,
                 interval_ms,
+                pod_name: pod_name.to_string(),
+                namespace: namespace.to_string(),
             })
         })
     }
