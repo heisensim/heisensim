@@ -3,41 +3,7 @@ language: en
 
 reviews:
   profile: chill
-  request_changes_workflow: true
   high_level_summary: true
-  poem: false
-  review_status: true
-  collapse_walkthrough: false
   auto_review:
     enabled: true
     drafts: false
-    base_branches:
-      - main
-  path_instructions:
-    - path: "crates/props/**"
-      instructions: |
-        Property checking engine. Focus on:
-        - Correctness of temporal logic and edge cases (zero events, never-recovers, absorbed faults)
-        - Percentile calculations (nearest-rank method)
-        - Per-probe filtering accuracy
-    - path: "crates/k8s/**"
-      instructions: |
-        Kubernetes integration. Check for:
-        - Proper error handling on K8s API calls
-        - Resource cleanup (partitions reverted, ephemeral containers)
-        - Pod discovery edge cases (no pods, no ready pods)
-    - path: "crates/cli/**"
-      instructions: |
-        CLI binary. Check for:
-        - User-facing error messages (anyhow context strings)
-        - Correct exit codes (0 = pass, 1 = property failure)
-        - Argument validation and defaults
-    - path: "crates/timeline/**"
-      instructions: |
-        Event bus and timeline correlation. Check for:
-        - Thread safety (Arc<Mutex> usage)
-        - Event ordering guarantees
-        - Query correctness (fault-to-detection latency)
-
-chat:
-  auto_reply: true
