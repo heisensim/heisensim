@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       duration:
-        description: "Test duration"
+        description: "Test duration (e.g. 2m, 5m)"
         default: "2m"
       seeds:
-        description: "Number of seeds to explore"
+        description: "Number of seeds to explore (1-50)"
         default: "5"
   schedule:
     - cron: '0 4 * * *'  # 4 AM UTC daily
@@ -26,6 +26,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       # ── Build heisensim from source ────────────────────────────
       - name: Install Rust toolchain
@@ -47,8 +49,11 @@ jobs:
 
       # ── Spin up k3d cluster ────────────────────────────────────
       - name: Create k3d cluster
+        env:
+          K3D_VERSION: v5.9.0
         run: |
-          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          curl -fsSL "https://raw.githubusercontent.com/k3d-io/k3d/${K3D_VERSION}/install.sh" | TAG="${K3D_VERSION}" bash
+          k3d version
           k3d cluster create preview --agents 2 --no-lb --timeout 120s
           kubectl cluster-info
 
@@ -76,24 +81,36 @@ jobs:
         id: chaos
         working-directory: examples/k8s-demo
         shell: bash
+        env:
+          INPUT_DURATION: ${{ github.event.inputs.duration || '2m' }}
+          INPUT_SEEDS: ${{ github.event.inputs.seeds || '5' }}
         run: |
           set -o pipefail
-          DURATION="${{ github.event.inputs.duration || '2m' }}"
-          SEEDS="${{ github.event.inputs.seeds || '5' }}"
+
+          # Validate inputs — reject anything that isn't a safe value
+          if ! [[ "$INPUT_DURATION" =~ ^[0-9]+[smh]$ ]]; then
+            echo "::error::Invalid duration format: ${INPUT_DURATION}"
+            exit 1
+          fi
+          if ! [[ "$INPUT_SEEDS" =~ ^[0-9]+$ ]] || [ "$INPUT_SEEDS" -lt 1 ] || [ "$INPUT_SEEDS" -gt 50 ]; then
+            echo "::error::Seeds must be 1-50, got: ${INPUT_SEEDS}"
+            exit 1
+          fi
 
           set +e
           heisensim explore \
             --namespace heisensim-demo \
-            --seeds "${SEEDS}" \
-            --duration "${DURATION}" \
+            --seeds "${INPUT_SEEDS}" \
+            --duration "${INPUT_DURATION}" \
             --warmup 15s \
             --faults crash,latency,partition \
             --config heisensim.toml \
             --output json 2>/dev/null | tee /tmp/heisensim-report.json
-          EXIT_CODE=${PIPESTATUS[0]}
+          HEISENSIM_EXIT=${PIPESTATUS[0]}
+          TEE_EXIT=${PIPESTATUS[1]}
           set -e
 
-          echo "exit-code=${EXIT_CODE}" >> $GITHUB_OUTPUT
+          echo "exit-code=${HEISENSIM_EXIT}" >> $GITHUB_OUTPUT
 
           # Also generate JUnit for GitHub test summary
           heisensim run \
@@ -105,7 +122,11 @@ jobs:
             --config heisensim.toml \
             --output junit > /tmp/heisensim-junit.xml || true
 
-          exit ${EXIT_CODE}
+          # Fail if either heisensim or tee failed
+          if [ "${TEE_EXIT}" -ne 0 ]; then
+            echo "::warning::tee failed with exit code ${TEE_EXIT}, report may be incomplete"
+          fi
+          exit ${HEISENSIM_EXIT}
 
       # ── Upload artifacts ───────────────────────────────────────
       - name: Upload test report
@@ -120,8 +141,10 @@ jobs:
       # ── Job summary ──────────────────────────────────────────────
       - name: Write job summary
         if: always()
+        env:
+          CHAOS_EXIT: ${{ steps.chaos.outputs.exit-code }}
         run: |
-          if [ "${{ steps.chaos.outputs.exit-code }}" = "0" ]; then
+          if [ "${CHAOS_EXIT}" = "0" ]; then
             echo "## ✅ E2E Chaos Test Passed" >> $GITHUB_STEP_SUMMARY
           else
             echo "## ❌ E2E Chaos Test Failed" >> $GITHUB_STEP_SUMMARY
