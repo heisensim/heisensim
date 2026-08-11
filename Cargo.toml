@@ -45,5 +45,5 @@ proptest = "1"
 # OpenTelemetry (HTTP transport via reqwest, per E9 review — avoids protoc requirement)
 opentelemetry = { version = "0.32", features = ["trace", "metrics"] }
 opentelemetry_sdk = { version = "0.32", features = ["trace", "metrics", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["reqwest-client", "trace", "metrics", "http-proto"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["reqwest-client", "reqwest-blocking-client", "trace", "metrics", "http-proto"] }
 tracing-opentelemetry = "0.33"

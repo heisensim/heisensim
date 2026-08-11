@@ -255,15 +255,20 @@ async fn main() -> Result<()> {
             opentelemetry_sdk::propagation::TraceContextPropagator::new(),
         );
 
+        // Derive signal-specific OTLP endpoints
+        let base = endpoint.trim_end_matches('/');
+        let traces_endpoint = format!("{}/v1/traces", base);
+        let metrics_endpoint = format!("{}/v1/metrics", base);
+
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
+            .with_endpoint(&traces_endpoint)
             .build()
             .context("Failed to create OTLP exporter")?;
 
         let metrics_exporter = opentelemetry_otlp::MetricExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
+            .with_endpoint(&metrics_endpoint)
             .build()
             .context("Failed to create OTLP metrics exporter")?;
 
@@ -341,19 +346,22 @@ async fn main() -> Result<()> {
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
     if let Some((provider, meter_provider)) = _otel_provider {
-        info!("Flushing OpenTelemetry traces...");
+        info!("Flushing OpenTelemetry traces and metrics...");
         match tokio::time::timeout(
             std::time::Duration::from_secs(3),
             tokio::task::spawn_blocking(move || {
-                let _ = provider.shutdown();
-                let _ = meter_provider.shutdown();
+                let trace_result = provider.shutdown();
+                let meter_result = meter_provider.shutdown();
+                (trace_result, meter_result)
             }),
         )
         .await
         {
-            Ok(Ok(())) => info!("OpenTelemetry traces flushed."),
+            Ok(Ok((Ok(()), Ok(())))) => info!("OpenTelemetry traces and metrics flushed."),
+            Ok(Ok((Err(e), _))) => warn!("OTel trace shutdown error: {}", e),
+            Ok(Ok((_, Err(e)))) => warn!("OTel metrics shutdown error: {}", e),
             Ok(Err(e)) => warn!("OTel shutdown task panicked: {}", e),
-            Err(_) => warn!("OTel shutdown timed out after 3s, traces may be lost."),
+            Err(_) => warn!("OTel shutdown timed out after 3s, data may be lost."),
         }
     }
 
@@ -599,7 +607,7 @@ async fn handle_run(
             mp,
             &verdicts,
             seed,
-            duration.as_secs_f64(),
+            summary.duration.as_secs_f64(),
             summary.total_faults,
         );
     }
