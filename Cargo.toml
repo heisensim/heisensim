@@ -40,6 +40,7 @@ tonic = "0.12"
 tonic-health = "0.12"
 kube = { version = "0.98", default-features = false, features = ["runtime", "derive", "client", "rustls-tls"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
+proptest = "1"
 
 # OpenTelemetry (HTTP transport via reqwest, per E9 review — avoids protoc requirement)
 opentelemetry = { version = "0.32", features = ["trace"] }

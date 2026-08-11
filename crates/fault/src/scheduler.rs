@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Types of faults that can be injected.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FaultType {
     /// Crash the target pod.
     Crash,
@@ -75,5 +75,178 @@ impl FaultScheduler {
         }
         let delay = self.rng.random_range(min_secs..max_secs);
         Duration::from_secs_f64(delay)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_new() {
+        let scheduler = FaultScheduler::new(42, vec![], vec![], "default".to_string());
+        assert_eq!(scheduler.seed, 42);
+        assert_eq!(scheduler.namespace, "default");
+    }
+
+    #[test]
+    fn test_next_fault_empty() {
+        let mut scheduler =
+            FaultScheduler::new(42, vec![], vec!["pod-1".to_string()], "ns".to_string());
+        assert!(scheduler.next_fault().is_none());
+
+        let mut scheduler =
+            FaultScheduler::new(42, vec![FaultType::Crash], vec![], "ns".to_string());
+        assert!(scheduler.next_fault().is_none());
+    }
+
+    #[test]
+    fn test_next_fault_valid() {
+        let mut scheduler = FaultScheduler::new(
+            42,
+            vec![FaultType::Crash],
+            vec!["pod-1".to_string()],
+            "ns".to_string(),
+        );
+        let fault = scheduler.next_fault().unwrap();
+        assert_eq!(fault.fault_type, FaultType::Crash);
+        assert_eq!(fault.target_pod, "pod-1");
+        assert_eq!(fault.namespace, "ns");
+    }
+
+    #[test]
+    fn test_determinism_same_seed() {
+        let mut s1 = FaultScheduler::new(
+            100,
+            vec![FaultType::Crash, FaultType::Partition],
+            vec!["p1".to_string(), "p2".to_string()],
+            "ns".to_string(),
+        );
+        let mut s2 = FaultScheduler::new(
+            100,
+            vec![FaultType::Crash, FaultType::Partition],
+            vec!["p1".to_string(), "p2".to_string()],
+            "ns".to_string(),
+        );
+
+        for _ in 0..10 {
+            let f1 = s1.next_fault().unwrap();
+            let f2 = s2.next_fault().unwrap();
+            assert_eq!(f1.fault_type, f2.fault_type);
+            assert_eq!(f1.target_pod, f2.target_pod);
+        }
+    }
+
+    #[test]
+    fn test_determinism_different_seed() {
+        let mut s1 = FaultScheduler::new(
+            100,
+            vec![FaultType::Crash, FaultType::Partition],
+            vec!["p1".to_string(), "p2".to_string()],
+            "ns".to_string(),
+        );
+        let mut s2 = FaultScheduler::new(
+            200,
+            vec![FaultType::Crash, FaultType::Partition],
+            vec!["p1".to_string(), "p2".to_string()],
+            "ns".to_string(),
+        );
+
+        let mut all_same = true;
+        for _ in 0..10 {
+            let f1 = s1.next_fault().unwrap();
+            let f2 = s2.next_fault().unwrap();
+            if f1.fault_type != f2.fault_type || f1.target_pod != f2.target_pod {
+                all_same = false;
+                break;
+            }
+        }
+        assert!(!all_same);
+    }
+
+    #[test]
+    fn test_all_faults_and_pods_selected() {
+        let faults = vec![
+            FaultType::Crash,
+            FaultType::Partition,
+            FaultType::Latency {
+                delay_ms: 10,
+                jitter_ms: 5,
+            },
+        ];
+        let pods = vec!["p1".to_string(), "p2".to_string(), "p3".to_string()];
+        let mut s = FaultScheduler::new(42, faults.clone(), pods.clone(), "ns".to_string());
+
+        let mut seen_faults = std::collections::HashSet::new();
+        let mut seen_pods = std::collections::HashSet::new();
+
+        for _ in 0..100 {
+            let f = s.next_fault().unwrap();
+            if !seen_faults.iter().any(|x| x == &f.fault_type) {
+                seen_faults.insert(f.fault_type.clone());
+            }
+            seen_pods.insert(f.target_pod);
+        }
+
+        assert_eq!(seen_faults.len(), 3);
+        assert_eq!(seen_pods.len(), 3);
+    }
+
+    #[test]
+    fn test_next_delay() {
+        let mut s = FaultScheduler::new(42, vec![], vec![], "ns".to_string());
+        let delay = s.next_delay(5.0, 5.0);
+        assert_eq!(delay.as_secs_f64(), 5.0);
+
+        let delay = s.next_delay(6.0, 5.0);
+        assert_eq!(delay.as_secs_f64(), 6.0);
+
+        for _ in 0..10 {
+            let delay = s.next_delay(1.0, 5.0);
+            assert!(delay.as_secs_f64() >= 1.0 && delay.as_secs_f64() < 5.0);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn pbt_next_fault_valid(seed in any::<u64>()) {
+            let faults = vec![FaultType::Crash, FaultType::Partition];
+            let pods = vec!["p1".to_string(), "p2".to_string()];
+            let mut s = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
+            for _ in 0..10 {
+                let f = s.next_fault().unwrap();
+                prop_assert!(faults.contains(&f.fault_type));
+                prop_assert!(pods.contains(&f.target_pod));
+                prop_assert_eq!(f.namespace, "ns".to_string());
+            }
+        }
+
+        #[test]
+        fn pbt_next_delay_valid(seed in any::<u64>(), min in 0.0..1000.0f64, max in 0.0..1000.0f64) {
+            let mut s = FaultScheduler::new(seed, vec![], vec![], "ns".to_string());
+            let delay = s.next_delay(min, max);
+            if min >= max {
+                prop_assert_eq!(delay, std::time::Duration::from_secs_f64(min));
+            } else {
+                prop_assert!(delay >= std::time::Duration::from_secs_f64(min));
+                prop_assert!(delay <= std::time::Duration::from_secs_f64(max));
+            }
+        }
+
+        #[test]
+        fn pbt_determinism(seed in any::<u64>()) {
+            let faults = vec![FaultType::Crash, FaultType::Partition];
+            let pods = vec!["p1".to_string(), "p2".to_string()];
+            let mut s1 = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
+            let mut s2 = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
+            for _ in 0..10 {
+                let f1 = s1.next_fault().unwrap();
+                let f2 = s2.next_fault().unwrap();
+                prop_assert_eq!(f1.fault_type, f2.fault_type);
+                prop_assert_eq!(f1.target_pod, f2.target_pod);
+            }
+        }
     }
 }

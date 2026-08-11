@@ -44,3 +44,36 @@ pub enum SyscallResult {
     /// Redirect the syscall (e.g. to another file descriptor or path)
     Redirect,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::SyscallHandler;
+
+    #[test]
+    fn test_intercepted_syscall_variants() {
+        let s = InterceptedSyscall::GetTimeOfDay;
+        assert_eq!(s, InterceptedSyscall::GetTimeOfDay);
+        assert_eq!(format!("{:?}", s), "GetTimeOfDay");
+
+        let s2 = InterceptedSyscall::Unknown { syscall_nr: 42 };
+        assert_eq!(s2.clone(), InterceptedSyscall::Unknown { syscall_nr: 42 });
+    }
+
+    #[test]
+    fn test_syscall_result_variants() {
+        let r = SyscallResult::Allow;
+        assert_eq!(r, SyscallResult::Allow);
+        assert_eq!(format!("{:?}", r), "Allow");
+
+        let r2 = SyscallResult::Replace(100);
+        assert_eq!(r2.clone(), SyscallResult::Replace(100));
+    }
+
+    #[test]
+    fn test_handler_new_and_unknown() {
+        let mut handler = SyscallHandler::new();
+        let result = handler.handle(InterceptedSyscall::Unknown { syscall_nr: 999 });
+        assert_eq!(result, SyscallResult::Allow);
+    }
+}

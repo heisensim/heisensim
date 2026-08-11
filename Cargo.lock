@@ -818,7 +818,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "heisensim"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -846,10 +846,12 @@ dependencies = [
 
 [[package]]
 name = "heisensim-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
+ "proptest",
  "rand 0.9.5",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "toml",
  "tracing",
@@ -858,9 +860,10 @@ dependencies = [
 
 [[package]]
 name = "heisensim-fault"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "heisensim-core",
+ "proptest",
  "rand 0.9.5",
  "serde",
  "thiserror 2.0.20",
@@ -869,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "heisensim-intercept"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "heisensim-core",
@@ -881,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "heisensim-k8s"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "heisensim-probe",
@@ -898,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "heisensim-probe"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "heisensim-timeline",
@@ -919,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "heisensim-props"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "heisensim-core",
@@ -933,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "heisensim-timeline"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "crossbeam-channel",

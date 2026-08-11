@@ -106,3 +106,32 @@ impl ProcessTable {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_table() {
+        let mut table = ProcessTable::new();
+        let node = NodeId(1);
+
+        let pid1 = table.register(node, "proc1".to_string(), VirtualTime(0));
+        let pid2 = table.register(node, "proc2".to_string(), VirtualTime(10));
+
+        assert_eq!(table.list_by_node(node).len(), 2);
+        assert_eq!(table.list_alive().len(), 2);
+
+        assert!(table.crash(pid1));
+        assert_eq!(table.list_alive().len(), 1);
+
+        assert!(table.kill(pid2));
+        assert_eq!(table.list_alive().len(), 0);
+
+        assert!(!table.crash(ProcessId(999))); // invalid pid
+
+        let proc = table.get(pid1).unwrap();
+        assert_eq!(proc.state, ProcessState::Crashed);
+        assert_eq!(proc.name, "proc1");
+    }
+}

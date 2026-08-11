@@ -91,3 +91,43 @@ pub enum SimulationState {
     Completed,
     Failed,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_time() {
+        let t1 = VirtualTime::from_millis(500);
+        let t2 = VirtualTime::from_millis(500);
+        assert_eq!(t1 + t2, VirtualTime::from_secs(1));
+
+        let mut t3 = VirtualTime::from_secs(2);
+        t3 -= VirtualTime::from_millis(500);
+        assert_eq!(t3.as_millis(), 1500);
+
+        let mut t4 = VirtualTime::from_secs(1);
+        t4 += VirtualTime::from_secs(1);
+        assert_eq!(t4.as_secs(), 2);
+
+        assert_eq!(format!("{}", t1), "500000000ns");
+    }
+
+    #[test]
+    fn test_types_serde() {
+        let nid = NodeId(42);
+        let json = serde_json::to_string(&nid).unwrap();
+        let nid2: NodeId = serde_json::from_str(&json).unwrap();
+        assert_eq!(nid, nid2);
+
+        let state = SimulationState::Running;
+        let json = serde_json::to_string(&state).unwrap();
+        let state2: SimulationState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, state2);
+
+        let fault = FaultKind::Custom("foo".to_string());
+        let json = serde_json::to_string(&fault).unwrap();
+        let fault2: FaultKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(fault, fault2);
+    }
+}

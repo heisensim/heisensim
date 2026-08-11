@@ -44,3 +44,84 @@ impl FromStr for SimSeed {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_sim_seed_new() {
+        let seed = SimSeed::new(42);
+        assert_eq!(seed.0, 42);
+    }
+
+    #[test]
+    fn test_sim_seed_random() {
+        let seed1 = SimSeed::random();
+        let seed2 = SimSeed::random();
+        assert_ne!(seed1, seed2);
+    }
+
+    #[test]
+    fn test_sim_seed_rng_same_sequence() {
+        let seed = SimSeed::new(12345);
+        let mut rng1 = seed.rng();
+        let mut rng2 = seed.rng();
+        assert_eq!(rng1.random::<u64>(), rng2.random::<u64>());
+        assert_eq!(rng1.random::<u64>(), rng2.random::<u64>());
+    }
+
+    #[test]
+    fn test_sim_seed_rng_different_sequence() {
+        let seed1 = SimSeed::new(1);
+        let seed2 = SimSeed::new(2);
+        let mut rng1 = seed1.rng();
+        let mut rng2 = seed2.rng();
+        assert_ne!(rng1.random::<u64>(), rng2.random::<u64>());
+    }
+
+    #[test]
+    fn test_sim_seed_display() {
+        let seed = SimSeed::new(0x123456789ABCDEF0);
+        assert_eq!(seed.to_string(), "seed:0x123456789ABCDEF0");
+    }
+
+    #[test]
+    fn test_sim_seed_from_str_decimal() {
+        let seed = SimSeed::from_str("12345").unwrap();
+        assert_eq!(seed.0, 12345);
+    }
+
+    #[test]
+    fn test_sim_seed_from_str_hex_prefix() {
+        let seed = SimSeed::from_str("0x1A").unwrap();
+        assert_eq!(seed.0, 0x1A);
+        let seed2 = SimSeed::from_str("0X1B").unwrap();
+        assert_eq!(seed2.0, 0x1B);
+    }
+
+    #[test]
+    fn test_sim_seed_from_str_seed_prefix() {
+        let seed = SimSeed::from_str("seed:0x1A").unwrap();
+        assert_eq!(seed.0, 0x1A);
+        let seed2 = SimSeed::from_str("seed:12345").unwrap();
+        assert_eq!(seed2.0, 12345);
+    }
+
+    #[test]
+    fn test_sim_seed_from_str_invalid() {
+        assert!(SimSeed::from_str("invalid").is_err());
+        assert!(SimSeed::from_str("seed:invalid").is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn test_sim_seed_roundtrip(val in any::<u64>()) {
+            let seed = SimSeed::new(val);
+            let s = seed.to_string();
+            let parsed = SimSeed::from_str(&s).unwrap();
+            assert_eq!(seed, parsed);
+        }
+    }
+}

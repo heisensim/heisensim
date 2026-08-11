@@ -59,3 +59,39 @@ impl SimulationConfig {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simulation_config_serde() {
+        let toml_str = r#"
+            duration = "1h"
+            
+            [[nodes]]
+            name = "node1"
+            image = "ubuntu:latest"
+            
+            [faults]
+            enabled = ["network_partition"]
+            
+            [[properties]]
+            name = "no_crash"
+            kind = "safety"
+        "#;
+
+        let config: SimulationConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.duration, "1h");
+        assert_eq!(config.nodes.len(), 1);
+        assert_eq!(config.nodes[0].name, "node1");
+        assert_eq!(config.faults.enabled, vec!["network_partition"]);
+        assert_eq!(config.properties.len(), 1);
+        assert_eq!(config.properties[0].name, "no_crash");
+
+        let ser = toml::to_string(&config).unwrap();
+        let config2: SimulationConfig = toml::from_str(&ser).unwrap();
+        assert_eq!(config.duration, config2.duration);
+        assert_eq!(config.nodes[0].name, config2.nodes[0].name);
+    }
+}

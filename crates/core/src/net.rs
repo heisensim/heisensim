@@ -133,3 +133,60 @@ impl VirtualNetwork {
         ready
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_network() {
+        let mut net = VirtualNetwork::new(SimSeed::new(123));
+        let node1 = NodeId(1);
+        let node2 = NodeId(2);
+
+        net.set_drop_probability(0.0);
+        net.set_delay_range(5, 10);
+
+        net.send(VirtualTime(0), node1, node2, vec![1, 2, 3]);
+
+        // Before 5ms, no delivery
+        let ready = net.deliver_ready(VirtualTime::from_millis(4));
+        assert!(ready.is_empty());
+
+        // By 10ms, it should be delivered
+        let ready = net.deliver_ready(VirtualTime::from_millis(10));
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].0, node2);
+        assert_eq!(ready[0].1.data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_virtual_network_partition() {
+        let mut net = VirtualNetwork::new(SimSeed::new(123));
+        let node1 = NodeId(1);
+        let node2 = NodeId(2);
+        let node3 = NodeId(3);
+
+        let mut a = HashSet::new();
+        a.insert(node1);
+        let mut b = HashSet::new();
+        b.insert(node2);
+
+        let part_id = net.add_partition(a, b);
+
+        net.send(VirtualTime(0), node1, node2, vec![1]); // partitioned
+        net.send(VirtualTime(0), node1, node3, vec![2]); // ok
+
+        let ready = net.deliver_ready(VirtualTime::from_millis(100));
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].0, node3);
+        assert_eq!(ready[0].1.data, vec![2]);
+
+        net.remove_partition(part_id);
+        net.send(VirtualTime(100), node1, node2, vec![3]); // ok now
+        let ready = net.deliver_ready(VirtualTime::from_millis(200));
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].0, node2);
+        assert_eq!(ready[0].1.data, vec![3]);
+    }
+}

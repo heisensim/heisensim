@@ -64,3 +64,23 @@ impl Explorer {
         todo!("Generate summary string")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exploration_strategy() {
+        let _s1 = ExplorationStrategy::Random;
+        let _s2 = ExplorationStrategy::CoverageGuided;
+        let _s3 = ExplorationStrategy::Guided;
+    }
+
+    #[test]
+    fn test_explorer_new() {
+        let explorer = Explorer::new(ExplorationStrategy::Random);
+        assert_eq!(explorer.coverage_bitmap.len(), 65536);
+        assert_eq!(explorer.iteration_count, 0);
+        assert!(explorer.best_seeds.is_empty());
+    }
+}

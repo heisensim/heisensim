@@ -40,3 +40,27 @@ impl FaultSchedule {
         self.events.iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::injector::FaultKind;
+
+    #[test]
+    fn test_fault_schedule() {
+        let mut schedule = FaultSchedule::new(42);
+        assert_eq!(schedule.initial_seed, 42);
+        assert_eq!(schedule.iter().count(), 0);
+
+        schedule.record(FaultEvent {
+            time: 100,
+            kind: FaultKind::ProcessCrash,
+            target: vec![1, 2],
+            duration: None,
+        });
+
+        assert_eq!(schedule.iter().count(), 1);
+        let event = schedule.iter().next().unwrap();
+        assert_eq!(event.time, 100);
+    }
+}

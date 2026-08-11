@@ -75,3 +75,14 @@ impl FaultInjector {
         todo!()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fault_injector_new() {
+        let _injector = FaultInjector::new();
+        let _injector2 = FaultInjector::default();
+    }
+}

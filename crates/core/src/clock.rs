@@ -76,3 +76,48 @@ impl VirtualClock {
         expired
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clock_advance_elapsed_reset() {
+        let mut clock = VirtualClock::new();
+        assert_eq!(clock.now(), VirtualTime(0));
+        clock.advance_to(VirtualTime(100));
+        assert_eq!(clock.now(), VirtualTime(100));
+        // Can't go backward
+        clock.advance_to(VirtualTime(50));
+        assert_eq!(clock.now(), VirtualTime(100));
+    }
+
+    #[test]
+    fn test_clock_sleep_and_tick() {
+        let mut clock = VirtualClock::new();
+        let target1 = NodeId(1);
+        let target2 = NodeId(2);
+
+        let cb1 = clock.sleep(target1, VirtualTime(100));
+        let cb2 = clock.sleep(target2, VirtualTime(200));
+        let cb3 = clock.sleep(target1, VirtualTime(50));
+
+        let expired = clock.tick();
+        assert_eq!(clock.now(), VirtualTime(50));
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].callback_id, cb3);
+
+        let expired = clock.tick();
+        assert_eq!(clock.now(), VirtualTime(100));
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].callback_id, cb1);
+
+        let expired = clock.tick();
+        assert_eq!(clock.now(), VirtualTime(200));
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].callback_id, cb2);
+
+        let expired = clock.tick();
+        assert!(expired.is_empty());
+    }
+}
