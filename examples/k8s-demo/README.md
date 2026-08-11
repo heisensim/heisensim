@@ -1,6 +1,6 @@
 # heisensim E2E Demo
 
-Chaos test a multi-service Kubernetes app in under 5 minutes.
+Verify your SLAs under chaos — in 5 minutes.
 
 ## What's in the box
 
@@ -19,7 +19,6 @@ Chaos test a multi-service Kubernetes app in under 5 minutes.
 ## Quick Start
 
 ```bash
-# Clone and run the demo
 git clone https://github.com/heisensim/heisensim.git
 cd heisensim/examples/k8s-demo
 make all
@@ -29,7 +28,8 @@ That's it. `make all` will:
 1. Create a k3d cluster with 2 agent nodes
 2. Deploy the demo app (redis + 2× nginx)
 3. Wait for all pods to be healthy
-4. Run a 2-minute chaos test with seed 42
+4. Generate and apply least-privilege RBAC
+5. Run a 2-minute chaos test with seed 42
 
 ## What You'll See
 
@@ -40,19 +40,31 @@ heisensim automatically discovers pods and health probes, then injects:
 - 🔌 **Network partitions** — iptables DROP between pods
 
 ### Property Verification
-After faults, heisensim evaluates 5 SLA properties:
+After faults, heisensim evaluates 5 SLA properties defined in [`heisensim.toml`](heisensim.toml):
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
-║  PROPERTY RESULTS                              4/5 PASS     ║
+║  PROPERTY RESULTS                              5/5 PASS      ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  ✅ PASS  fast-recovery      recovery < 30s (actual: 8.2s)  ║
 ║  ✅ PASS  high-availability  avail ≥ 95% (actual: 97.1%)    ║
-║  ✅ PASS  bounded-errors     max 5 consecutive (actual: 2)  ║
-║  ✅ PASS  no-cascade         no cascading failures           ║
-║  ✅ PASS  low-latency        p99 < 500ms (actual: 230ms)    ║
+║  ✅ PASS  bounded-errors     max 5 consecutive (actual: 2)   ║
+║  ✅ PASS  no-cascade         no cascading failures            ║
+║  ✅ PASS  low-latency        p99 < 500ms (actual: 230ms)     ║
 ╚═══════════════════════════════════════════════════════════════╝
 ```
+
+## All Make Targets
+
+| Target | What it does |
+|:-------|:-------------|
+| `make all` | Full pipeline: setup → deploy → wait → rbac → run |
+| `make run` | Single chaos test (seed 42, 2m) |
+| `make explore` | 10 random seeds — find edge cases |
+| `make rbac` | Generate & apply least-privilege K8s RBAC |
+| `make junit` | Run and save JUnit XML report |
+| `make json` | Run and save JSON report |
+| `make clean` | Delete cluster and reports |
 
 ## Explore Mode
 
@@ -70,6 +82,54 @@ This runs 10 different random seeds, each with different fault timing:
   ✅ seed 0x0003  │  faults: 2  │  failures: 0  │  props: 5/5
 ```
 
+## CI Integration
+
+### JUnit XML (for test runners)
+
+```bash
+make junit
+# → heisensim-report.xml
+```
+
+```xml
+<testsuite name="heisensim" tests="5" failures="0">
+  <testcase name="fast-recovery" classname="heisensim.properties">
+    <system-out>recovery &lt; 30s (actual: 8.2s)</system-out>
+  </testcase>
+  ...
+</testsuite>
+```
+
+### JSON (for dashboards and pipelines)
+
+```bash
+make json
+# → heisensim-report.json
+```
+
+### RBAC (least-privilege)
+
+```bash
+make rbac
+```
+
+Generates a `ServiceAccount`, `Role`, and `RoleBinding` scoped to exactly the permissions heisensim needs — nothing more:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: heisensim
+  namespace: heisensim-demo
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "delete"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
+```
+
 ## Replay a Bug
 
 Found an interesting seed? Replay it deterministically:
@@ -82,7 +142,7 @@ Same seed → same faults → same results. Every time.
 
 ## Configuration
 
-See [`heisensim.toml`](heisensim.toml) for the property definitions. Edit thresholds to see how your SLAs hold up:
+Edit [`heisensim.toml`](heisensim.toml) to tune property thresholds:
 
 ```toml
 [[properties]]
@@ -101,4 +161,6 @@ make clean
 
 - Try it on your own namespace: `heisensim run --namespace your-app`
 - Add stricter properties to `heisensim.toml`
-- Run in CI: `heisensim explore --config heisensim.toml` exits 1 on failure
+- Run in CI: `heisensim explore --config heisensim.toml` (exits 1 on failure)
+- Export metrics: `--otel-endpoint http://localhost:4318` for Grafana dashboards
+- Generate RBAC: `heisensim rbac --namespace your-app --faults crash,latency`
