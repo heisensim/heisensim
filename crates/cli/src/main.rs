@@ -141,6 +141,9 @@ struct InitArgs {
 
     #[arg(long, default_value = "heisensim.toml")]
     output: PathBuf,
+
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Args, Debug)]
@@ -673,15 +676,59 @@ async fn handle_init(args: InitArgs) -> Result<()> {
         probe_count = probes.len()
     );
 
-    for probe in &probes {
-        toml.push_str(&format!("# {}\n", probe.name()));
+    if probes.is_empty() {
+        toml.push_str("# No probes discovered.\n");
+        toml.push_str("# Add manual probes here. Example:\n");
+        toml.push_str("# [[probes]]\n");
+        toml.push_str("# type = \"http\"\n");
+        toml.push_str("# name = \"my-service-health\"\n");
+        toml.push_str("# url = \"http://my-service:8080/health\"\n");
+        toml.push_str("# expected_status = 200\n");
+        toml.push_str("# interval_ms = 10000\n");
+        toml.push_str("# timeout_ms = 5000\n");
+    } else {
+        for probe in &probes {
+            match probe {
+                heisensim_probe::config::ProbeConfig::Http(c) => {
+                    toml.push_str(&format!(
+                        "[[probes]]\ntype = \"http\"\nname = \"{}\"\nurl = \"{}\"\nexpected_status = {}\ninterval_ms = {}\ntimeout_ms = {}\n\n",
+                        c.name, c.url, c.expected_status, c.interval_ms, c.timeout_ms
+                    ));
+                }
+                heisensim_probe::config::ProbeConfig::Tcp(c) => {
+                    toml.push_str(&format!(
+                        "[[probes]]\ntype = \"tcp\"\nname = \"{}\"\nhost = \"{}\"\nport = {}\ninterval_ms = {}\ntimeout_ms = {}\n\n",
+                        c.name, c.host, c.port, c.interval_ms, c.timeout_ms
+                    ));
+                }
+                heisensim_probe::config::ProbeConfig::Grpc(c) => {
+                    toml.push_str(&format!(
+                        "[[probes]]\ntype = \"grpc\"\nname = \"{}\"\naddress = \"{}\"\ninterval_ms = {}\ntimeout_ms = {}\n\n",
+                        c.name, c.address, c.interval_ms, c.timeout_ms
+                    ));
+                }
+                heisensim_probe::config::ProbeConfig::Exec(c) => {
+                    // Quick and easy array formatting
+                    let cmd_str =
+                        serde_json::to_string(&c.command).unwrap_or_else(|_| "[]".to_string());
+                    toml.push_str(&format!(
+                        "[[probes]]\ntype = \"exec\"\nname = \"{}\"\ncommand = {}\ninterval_ms = {}\ntimeout_ms = {}\n\n",
+                        c.name, cmd_str, c.interval_ms, c.timeout_ms
+                    ));
+                }
+            }
+        }
     }
 
-    info!("Writing configuration to '{}'...", args.output.display());
-    std::fs::write(&args.output, toml)?;
+    if args.dry_run {
+        println!("{}", toml);
+    } else {
+        info!("Writing configuration to '{}'...", args.output.display());
+        std::fs::write(&args.output, toml)?;
+    }
 
     println!(
-        "Init complete. Discovered {} pods and {} probes.",
+        "✨ Init complete! Discovered {} pods and {} probes.",
         pods.len(),
         probes.len()
     );
