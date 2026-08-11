@@ -1,0 +1,57 @@
+# heisensim GitLab CI Template
+# Include in your .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/heisensim/heisensim/main/.gitlab/heisensim.yml'
+#
+#   chaos-test:
+#     extends: .heisensim
+#     variables:
+#       HEISENSIM_NAMESPACE: "my-app"
+#       HEISENSIM_DURATION: "2m"
+#       HEISENSIM_SEED: "42"
+
+.heisensim:
+  image: ghcr.io/heisensim/heisensim:${HEISENSIM_VERSION:-latest}
+  stage: test
+  variables:
+    HEISENSIM_NAMESPACE: "default"
+    HEISENSIM_DURATION: "5m"
+    HEISENSIM_WARMUP: "30s"
+    HEISENSIM_FAULTS: "crash,latency"
+    HEISENSIM_OUTPUT: "json"
+    HEISENSIM_VERSION: "latest"
+  script:
+    - |
+      ARGS="run"
+      ARGS="${ARGS} --namespace ${HEISENSIM_NAMESPACE}"
+      ARGS="${ARGS} --duration ${HEISENSIM_DURATION}"
+      ARGS="${ARGS} --warmup ${HEISENSIM_WARMUP}"
+      ARGS="${ARGS} --faults ${HEISENSIM_FAULTS}"
+      ARGS="${ARGS} --output ${HEISENSIM_OUTPUT}"
+
+      if [ -n "${HEISENSIM_SEED}" ]; then
+        ARGS="${ARGS} --seed ${HEISENSIM_SEED}"
+      fi
+
+      if [ -n "${HEISENSIM_CONFIG}" ]; then
+        ARGS="${ARGS} --config ${HEISENSIM_CONFIG}"
+      fi
+
+      if [ -n "${HEISENSIM_EXTRA_ARGS}" ]; then
+        ARGS="${ARGS} ${HEISENSIM_EXTRA_ARGS}"
+      fi
+
+      heisensim ${ARGS} | tee heisensim-report.json
+  artifacts:
+    when: always
+    paths:
+      - heisensim-report.json
+    reports:
+      junit: heisensim-report.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - when: manual
+      allow_failure: true
