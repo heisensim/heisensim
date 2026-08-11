@@ -13,6 +13,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod metrics;
 mod properties;
 mod rbac;
 mod report;
@@ -254,16 +255,36 @@ async fn main() -> Result<()> {
             opentelemetry_sdk::propagation::TraceContextPropagator::new(),
         );
 
+        // Derive signal-specific OTLP endpoints
+        let base = endpoint.trim_end_matches('/');
+        let traces_endpoint = format!("{}/v1/traces", base);
+        let metrics_endpoint = format!("{}/v1/metrics", base);
+
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
-            .with_endpoint(endpoint)
+            .with_endpoint(&traces_endpoint)
             .build()
             .context("Failed to create OTLP exporter")?;
+
+        let metrics_exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_http()
+            .with_endpoint(&metrics_endpoint)
+            .build()
+            .context("Failed to create OTLP metrics exporter")?;
 
         // E9 fix #3: AlwaysOn sampler — chaos events are high-value, low-volume
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_batch_exporter(exporter)
             .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name("heisensim")
+                    .build(),
+            )
+            .build();
+
+        let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+            .with_periodic_exporter(metrics_exporter)
             .with_resource(
                 opentelemetry_sdk::Resource::builder()
                     .with_service_name("heisensim")
@@ -281,9 +302,9 @@ async fn main() -> Result<()> {
 
         info!(
             endpoint = endpoint.as_str(),
-            "OpenTelemetry tracing enabled"
+            "OpenTelemetry tracing and metrics enabled"
         );
-        Some(provider)
+        Some((provider, meter_provider))
     } else {
         tracing_subscriber::registry()
             .with(filter)
@@ -303,7 +324,7 @@ async fn main() -> Result<()> {
     }
 
     let exit_code = match cli.command {
-        Commands::Run(args) => handle_run(args).await?,
+        Commands::Run(args) => handle_run(args, _otel_provider.as_ref().map(|p| &p.1)).await?,
         Commands::Replay(args) => {
             handle_replay(args).await?;
             0
@@ -324,18 +345,23 @@ async fn main() -> Result<()> {
     };
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
-    if let Some(provider) = _otel_provider {
-        info!("Flushing OpenTelemetry traces...");
+    if let Some((provider, meter_provider)) = _otel_provider {
+        info!("Flushing OpenTelemetry traces and metrics...");
         match tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            tokio::task::spawn_blocking(move || provider.shutdown()),
+            tokio::task::spawn_blocking(move || {
+                let trace_result = provider.shutdown();
+                let meter_result = meter_provider.shutdown();
+                (trace_result, meter_result)
+            }),
         )
         .await
         {
-            Ok(Ok(Ok(()))) => info!("OpenTelemetry traces flushed."),
-            Ok(Ok(Err(e))) => warn!("OTel shutdown error: {}", e),
+            Ok(Ok((Ok(()), Ok(())))) => info!("OpenTelemetry traces and metrics flushed."),
+            Ok(Ok((Err(e), _))) => warn!("OTel trace shutdown error: {}", e),
+            Ok(Ok((_, Err(e)))) => warn!("OTel metrics shutdown error: {}", e),
             Ok(Err(e)) => warn!("OTel shutdown task panicked: {}", e),
-            Err(_) => warn!("OTel shutdown timed out after 3s, traces may be lost."),
+            Err(_) => warn!("OTel shutdown timed out after 3s, data may be lost."),
         }
     }
 
@@ -346,7 +372,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_run(args: RunArgs) -> Result<i32> {
+async fn handle_run(
+    args: RunArgs,
+    meter_provider: Option<&opentelemetry_sdk::metrics::SdkMeterProvider>,
+) -> Result<i32> {
     let seed = args.seed.unwrap_or_else(|| rand::rng().random());
     println!("Config Summary:");
     println!("  Namespace: {}", args.namespace);
@@ -570,6 +599,17 @@ async fn handle_run(args: RunArgs) -> Result<i32> {
                 exit_code = 1;
             }
         }
+    }
+
+    if let Some(mp) = meter_provider {
+        let summary = heisensim_timeline::query::summary(&final_events);
+        metrics::emit_verdict_metrics(
+            mp,
+            &verdicts,
+            seed,
+            summary.duration.as_secs_f64(),
+            summary.total_faults,
+        );
     }
 
     // JSON output
