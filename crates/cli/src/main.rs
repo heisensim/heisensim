@@ -292,8 +292,15 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 3. Print ASCII banner
-    println!("{}", BANNER);
+    // 3. Print ASCII banner (skip for machine-readable output)
+    let is_machine_output = matches!(&cli.command, Commands::Rbac(_))
+        || matches!(
+            &cli.command,
+            Commands::Run(a) if a.output == OutputFormat::Json || a.output == OutputFormat::Junit
+        );
+    if !is_machine_output {
+        eprintln!("{}", BANNER);
+    }
 
     let exit_code = match cli.command {
         Commands::Run(args) => handle_run(args).await?,
