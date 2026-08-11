@@ -14,6 +14,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod properties;
+mod rbac;
 mod report;
 
 /// ASCII art banner printed on CLI startup.
@@ -57,6 +58,9 @@ enum Commands {
 
     /// Run multiple simulations with different seeds to find bugs
     Explore(ExploreArgs),
+
+    /// Generate least-privilege RBAC manifests
+    Rbac(RbacArgs),
 }
 
 #[derive(Args, Debug)]
@@ -117,6 +121,8 @@ enum OutputFormat {
     Text,
     /// Machine-readable JSON (for CI pipelines)
     Json,
+    /// JUnit XML format (for CI test reporters)
+    Junit,
 }
 
 #[derive(Args, Debug)]
@@ -202,6 +208,25 @@ struct ExploreArgs {
     otel_endpoint: Option<String>,
 }
 
+#[derive(Args, Debug)]
+struct RbacArgs {
+    /// Target namespace
+    #[arg(long, default_value = "default")]
+    namespace: String,
+
+    /// Comma-separated fault types
+    #[arg(long, default_value = "crash,latency")]
+    faults: String,
+
+    /// Service account name
+    #[arg(long, default_value = "heisensim")]
+    service_account: String,
+
+    /// Config file (reads faults from config)
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. Parse CLI first to check for --otel-endpoint
@@ -267,8 +292,15 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 3. Print ASCII banner
-    println!("{}", BANNER);
+    // 3. Print ASCII banner (skip for machine-readable output)
+    let is_machine_output = matches!(&cli.command, Commands::Rbac(_))
+        || matches!(
+            &cli.command,
+            Commands::Run(a) if a.output == OutputFormat::Json || a.output == OutputFormat::Junit
+        );
+    if !is_machine_output {
+        eprintln!("{}", BANNER);
+    }
 
     let exit_code = match cli.command {
         Commands::Run(args) => handle_run(args).await?,
@@ -285,6 +317,10 @@ async fn main() -> Result<()> {
             0
         }
         Commands::Explore(args) => handle_explore(args).await?,
+        Commands::Rbac(args) => {
+            handle_rbac(args).await?;
+            0
+        }
     };
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
@@ -504,7 +540,9 @@ async fn handle_run(args: RunArgs) -> Result<i32> {
     // Report
     let final_events = handle.events();
     info!("Simulation complete. Rendering report...");
-    report::render_terminal_report(&final_events);
+    if args.output == OutputFormat::Text {
+        report::render_terminal_report(&final_events);
+    }
 
     // Save JSON
     let json = report::render_json_report(&final_events);
@@ -546,6 +584,9 @@ async fn handle_run(args: RunArgs) -> Result<i32> {
             "passed": exit_code == 0,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if args.output == OutputFormat::Junit {
+        let junit = report::render_junit_report(&final_events, &verdicts);
+        println!("{}", junit);
     }
 
     // Cleanup K3d if we created it
@@ -755,6 +796,41 @@ async fn handle_report(args: ReportArgs) -> Result<()> {
         _ => report::render_terminal_report(&events),
     }
 
+    Ok(())
+}
+
+async fn handle_rbac(args: RbacArgs) -> Result<()> {
+    let mut faults: Vec<String> = args
+        .faults
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    if let Some(config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(&config_path).context("Failed to read config file")?;
+        let config_val: toml::Value = toml::from_str(&config_str)?;
+
+        if let Some(faults_arr) = config_val.get("faults").and_then(|v| v.as_array()) {
+            faults.clear();
+            for f in faults_arr {
+                if let Some(t) = f.get("type").and_then(|v| v.as_str()) {
+                    faults.push(t.to_string());
+                }
+            }
+        }
+
+        if let Some(sim) = config_val.get("simulation") {
+            if let Some(method) = sim.get("inject_method").and_then(|v| v.as_str()) {
+                if method == "debug" && !faults.contains(&"debug".to_string()) {
+                    faults.push("debug".to_string());
+                }
+            }
+        }
+    }
+
+    let yaml = rbac::generate_rbac(&args.namespace, &faults, &args.service_account);
+    println!("{}", yaml);
     Ok(())
 }
 

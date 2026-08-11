@@ -1,3 +1,4 @@
+use heisensim_props::PropertyVerdict;
 use heisensim_timeline::{
     event::{EventKind, TimelineEvent},
     query,
@@ -316,4 +317,105 @@ pub fn render_json_report(events: &[TimelineEvent]) -> String {
         "timeline": events,
     });
     serde_json::to_string_pretty(&report).unwrap_or_default()
+}
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+pub fn render_junit_report(events: &[TimelineEvent], verdicts: &[PropertyVerdict]) -> String {
+    let summary = query::summary(events);
+    let mut report = String::new();
+
+    report.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+
+    let duration_secs = summary.duration.as_secs_f64();
+    let failures = verdicts.iter().filter(|v| !v.passed).count();
+
+    report.push_str(&format!(
+        "<testsuite name=\"heisensim\" tests=\"{}\" failures=\"{}\" time=\"{:.1}\">\n",
+        verdicts.len(),
+        failures,
+        duration_secs
+    ));
+
+    for verdict in verdicts {
+        report.push_str(&format!(
+            "  <testcase name=\"{}\" classname=\"heisensim.properties\" time=\"0.0\">\n",
+            escape_xml(&verdict.property_name)
+        ));
+
+        let message = format!("{} (actual: {})", verdict.expected, verdict.actual);
+
+        if verdict.passed {
+            report.push_str(&format!(
+                "    <system-out>{}</system-out>\n",
+                escape_xml(&message)
+            ));
+        } else {
+            let inner_msg = format!(
+                "Property '{}' failed: {}, expected {}",
+                verdict.property_name, verdict.actual, verdict.expected
+            );
+
+            report.push_str(&format!(
+                "    <failure message=\"{}\" type=\"PropertyFailure\">{}</failure>\n",
+                escape_xml(&message),
+                escape_xml(&inner_msg)
+            ));
+        }
+
+        report.push_str("  </testcase>\n");
+    }
+
+    report.push_str("</testsuite>\n");
+
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_render_junit_report() {
+        let events = vec![TimelineEvent {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            elapsed: Duration::from_secs(120),
+            kind: EventKind::SimulationEnded {
+                total_faults: 0,
+                total_failures: 0,
+            },
+        }];
+
+        let verdicts = vec![
+            PropertyVerdict {
+                passed: true,
+                property_name: "fast-recovery".to_string(),
+                expected: "recovery < 30s".to_string(),
+                actual: "8.2s".to_string(),
+                details: vec![],
+            },
+            PropertyVerdict {
+                passed: false,
+                property_name: "high-availability".to_string(),
+                expected: "avail >= 99%".to_string(),
+                actual: "94.2%".to_string(),
+                details: vec![],
+            },
+        ];
+
+        let xml = render_junit_report(&events, &verdicts);
+        assert!(xml.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        assert!(xml.contains("<testsuite name=\"heisensim\" tests=\"2\" failures=\"1\""));
+        assert!(xml.contains("name=\"fast-recovery\""));
+        assert!(xml.contains("recovery &lt; 30s"));
+        assert!(xml.contains("<failure message=\"avail &gt;= 99% (actual: 94.2%)\""));
+    }
 }

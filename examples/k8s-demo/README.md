@@ -11,6 +11,7 @@ Chaos test a multi-service Kubernetes app in under 5 minutes.
 
 ## Prerequisites
 
+- [Docker](https://docs.docker.com/get-docker/), [OrbStack](https://orbstack.dev), or [Colima](https://github.com/abiosoft/colima) (container runtime for k3d)
 - [heisensim](https://heisensim.dev) (`brew install heisensim/tap/heisensim`)
 - [k3d](https://k3d.io) (`brew install k3d`)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
