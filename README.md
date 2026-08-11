@@ -144,9 +144,11 @@ Properties produce verdicts with details:
 - **Ephemeral container injection** — works with distroless images via `kubectl debug`
 - **Monitors health probes during faults** — HTTP, TCP, gRPC, exec probes
 - **Correlates faults to failures** — microsecond-precision event timeline
+- **OpenTelemetry correlation** — links fault spans to your application traces via `traceparent`
 - **Deterministic replay** — same seed = same faults = same results
 - **Property checking** — verify SLA invariants automatically
 - **Explore mode** — run many seeds in parallel to find interesting failures
+- **JSON output** — `--output json` for CI pipeline integration
 
 ---
 
@@ -167,6 +169,8 @@ heisensim run --namespace demo --seed 42 --duration 2m --config heisensim.toml
 | `--warmup` | `30s` | Warmup before faults start |
 | `--faults` | `crash,latency` | Comma-separated fault types |
 | `--inject-method` | `exec` | `exec` or `debug` (ephemeral containers) |
+| `--output` | `terminal` | Output format: `terminal`, `json`, `markdown` |
+| `--otel-endpoint` | — | OTLP endpoint for trace correlation |
 | `--k3d` | — | Spin up ephemeral K3d cluster |
 
 ### `heisensim explore`
@@ -183,6 +187,9 @@ Auto-generate config from running cluster:
 
 ```bash
 heisensim init --namespace demo --output heisensim.toml
+
+# Preview without writing
+heisensim init --namespace demo --dry-run
 ```
 
 ### `heisensim replay`
@@ -229,7 +236,8 @@ heisensim/
 
 - **Phase 1 ✅**: K8s fault injection, auto-discovery, timeline correlation, deterministic replay
 - **Phase 2 ✅**: Property checking, explore mode, ephemeral container injection, gRPC probes
-- **Phase 3 🔜**: DaemonSet agent, OpenTelemetry correlation, eBPF network partitions
+- **Phase 2.5 ✅**: OpenTelemetry correlation, JSON output, CI pipeline support, crates.io publish
+- **Phase 3 🔜**: GitHub Action (`uses: heisensim/action@v1`), docs site, eBPF network partitions
 - **Phase 4 📋**: Process-level determinism (seccomp-BPF / ptrace)
 
 ---
