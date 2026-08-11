@@ -42,7 +42,7 @@ heisensim automatically discovers pods and health probes, then injects:
 ### Property Verification
 After faults, heisensim evaluates 5 SLA properties defined in [`heisensim.toml`](heisensim.toml):
 
-```
+```text
 ╔═══════════════════════════════════════════════════════════════╗
 ║  PROPERTY RESULTS                              5/5 PASS      ║
 ╠═══════════════════════════════════════════════════════════════╣
@@ -76,7 +76,7 @@ make explore
 
 This runs 10 different random seeds, each with different fault timing:
 
-```
+```text
   ✅ seed 0x0001  │  faults: 3  │  failures: 1  │  props: 5/5
   ❌ seed 0x0002  │  faults: 4  │  failures: 8  │  props: 3/5
   ✅ seed 0x0003  │  faults: 2  │  failures: 0  │  props: 5/5
@@ -119,7 +119,7 @@ Generates a `ServiceAccount`, `Role`, and `RoleBinding` scoped to exactly the pe
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: heisensim
+  name: heisensim-role
   namespace: heisensim-demo
 rules:
 - apiGroups: [""]

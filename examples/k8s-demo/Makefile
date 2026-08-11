@@ -1,5 +1,6 @@
 .PHONY: all setup deploy wait rbac run explore junit json clean
 
+SHELL := /bin/bash
 CLUSTER_NAME := heisensim-demo
 NAMESPACE := heisensim-demo
 
@@ -33,7 +34,7 @@ rbac:
 		--faults crash,latency,partition
 	@echo ""
 	@echo "Applying RBAC..."
-	heisensim rbac \
+	set -o pipefail; heisensim rbac \
 		--namespace $(NAMESPACE) \
 		--faults crash,latency,partition \
 	| kubectl apply -f -
@@ -64,7 +65,7 @@ explore:
 # JUnit XML output (pipe to CI)
 junit:
 	@echo "📋 Generating JUnit XML report..."
-	heisensim run \
+	set -o pipefail; heisensim run \
 		--namespace $(NAMESPACE) \
 		--seed 42 \
 		--duration 2m \
@@ -78,7 +79,7 @@ junit:
 # JSON output (pipe to CI or dashboards)
 json:
 	@echo "📊 Generating JSON report..."
-	heisensim run \
+	set -o pipefail; heisensim run \
 		--namespace $(NAMESPACE) \
 		--seed 42 \
 		--duration 2m \
@@ -92,6 +93,6 @@ json:
 # Tear down
 clean:
 	@echo "🧹 Cleaning up..."
-	k3d cluster delete $(CLUSTER_NAME)
+	-k3d cluster delete $(CLUSTER_NAME)
 	rm -f heisensim-report.xml heisensim-report.json
-	@echo "✅ Cluster deleted."
+	@echo "✅ Cleanup complete."
