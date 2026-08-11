@@ -82,7 +82,6 @@ impl FaultScheduler {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use std::time::Duration;
 
     #[test]
     fn test_new() {
