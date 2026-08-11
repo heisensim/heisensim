@@ -1,10 +1,11 @@
-.PHONY: all setup deploy wait run explore clean
+.PHONY: all setup deploy wait rbac run explore junit json clean
 
+SHELL := /bin/bash
 CLUSTER_NAME := heisensim-demo
 NAMESPACE := heisensim-demo
 
 # One command to rule them all
-all: setup deploy wait run
+all: setup deploy wait rbac run
 
 # Create a k3d cluster
 setup:
@@ -24,6 +25,20 @@ wait:
 	kubectl wait --for=condition=ready pod --all -n $(NAMESPACE) --timeout=120s
 	@echo "✅ All pods ready."
 	kubectl get pods -n $(NAMESPACE)
+
+# Generate and apply least-privilege RBAC
+rbac:
+	@echo "🔒 Generating least-privilege RBAC..."
+	heisensim rbac \
+		--namespace $(NAMESPACE) \
+		--faults crash,latency,partition
+	@echo ""
+	@echo "Applying RBAC..."
+	set -o pipefail; heisensim rbac \
+		--namespace $(NAMESPACE) \
+		--faults crash,latency,partition \
+	| kubectl apply -f -
+	@echo "✅ RBAC applied."
 
 # Single chaos test run
 run:
@@ -47,8 +62,37 @@ explore:
 		--faults crash,latency,partition \
 		--config heisensim.toml
 
+# JUnit XML output (pipe to CI)
+junit:
+	@echo "📋 Generating JUnit XML report..."
+	set -o pipefail; heisensim run \
+		--namespace $(NAMESPACE) \
+		--seed 42 \
+		--duration 2m \
+		--warmup 15s \
+		--faults crash,latency,partition \
+		--config heisensim.toml \
+		--output junit | tee heisensim-report.xml
+	@echo ""
+	@echo "✅ Report saved to heisensim-report.xml"
+
+# JSON output (pipe to CI or dashboards)
+json:
+	@echo "📊 Generating JSON report..."
+	set -o pipefail; heisensim run \
+		--namespace $(NAMESPACE) \
+		--seed 42 \
+		--duration 2m \
+		--warmup 15s \
+		--faults crash,latency,partition \
+		--config heisensim.toml \
+		--output json | tee heisensim-report.json
+	@echo ""
+	@echo "✅ Report saved to heisensim-report.json"
+
 # Tear down
 clean:
 	@echo "🧹 Cleaning up..."
-	k3d cluster delete $(CLUSTER_NAME)
-	@echo "✅ Cluster deleted."
+	-k3d cluster delete $(CLUSTER_NAME)
+	rm -f heisensim-report.xml heisensim-report.json
+	@echo "✅ Cleanup complete."
