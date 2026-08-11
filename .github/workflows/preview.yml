@@ -23,14 +23,14 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # ── Build heisensim from source ────────────────────────────
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -73,7 +73,9 @@ jobs:
       - name: Run chaos test
         id: chaos
         working-directory: examples/k8s-demo
+        shell: bash
         run: |
+          set -o pipefail
           DURATION="${{ github.event.inputs.duration || '2m' }}"
           SEEDS="${{ github.event.inputs.seeds || '5' }}"
 
@@ -85,8 +87,8 @@ jobs:
             --warmup 15s \
             --faults crash,latency,partition \
             --config heisensim.toml \
-            --output json | tee /tmp/heisensim-report.json
-          EXIT_CODE=$?
+            --output json 2>/dev/null | tee /tmp/heisensim-report.json
+          EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
           echo "exit-code=${EXIT_CODE}" >> $GITHUB_OUTPUT
@@ -106,7 +108,7 @@ jobs:
       # ── Upload artifacts ───────────────────────────────────────
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: heisensim-report
           path: |
@@ -116,9 +118,10 @@ jobs:
       # ── PR comment with results ────────────────────────────────
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
+            const MARKER = '<!-- heisensim-preview-env -->';
             const fs = require('fs');
             let report = '{}';
             try {
@@ -132,16 +135,34 @@ jobs:
             const icon = passed ? '✅' : '❌';
             const status = passed ? 'All properties passed' : 'Some properties failed';
 
-            let body = `## ${icon} Chaos Test Results\n\n`;
+            let body = `${MARKER}\n## ${icon} Chaos Test Results\n\n`;
             body += `**Status:** ${status}\n`;
             body += `**Exit code:** ${exitCode}\n\n`;
 
             try {
               const data = JSON.parse(report);
-              if (data.properties) {
+              // explore mode wraps results in a top-level array
+              const results = data.results || [data];
+              const allProps = [];
+              for (const run of results) {
+                if (run.properties) {
+                  for (const p of run.properties) {
+                    // Deduplicate by property name (keep worst result)
+                    const existing = allProps.find(x => x.property_name === p.property_name);
+                    if (!existing) {
+                      allProps.push({...p});
+                    } else if (existing.passed && !p.passed) {
+                      Object.assign(existing, p);
+                    }
+                  }
+                }
+              }
+
+              if (allProps.length > 0) {
+                body += `**Seeds tested:** ${results.length}\n\n`;
                 body += '| Property | Result | Expected | Actual |\n';
                 body += '|:---------|:-------|:---------|:-------|\n';
-                for (const p of data.properties) {
+                for (const p of allProps) {
                   const r = p.passed ? '✅ PASS' : '❌ FAIL';
                   body += `| ${p.property_name} | ${r} | ${p.expected} | ${p.actual} |\n`;
                 }
@@ -152,17 +173,19 @@ jobs:
 
             body += `\n---\n*Tested with heisensim preview environment (k3d)*`;
 
-            // Find and update existing comment or create new
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
+            // Find existing bot comment with our marker
+            const allComments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              }
+            );
 
-            const marker = '## ✅ Chaos Test Results\n\n';
-            const markerFail = '## ❌ Chaos Test Results\n\n';
-            const existing = comments.find(c =>
-              c.body.includes(marker) || c.body.includes(markerFail)
+            const existing = allComments.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes(MARKER)
             );
 
             if (existing) {
