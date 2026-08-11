@@ -5,9 +5,9 @@
 [![Crates.io](https://img.shields.io/crates/v/heisensim.svg)](https://crates.io/crates/heisensim)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-MIT)
 
-> **"Deterministic chaos testing for Kubernetes — with SLA verification"**
+> **"Inject faults. Verify SLAs. In CI."**
 
-**heisensim** is a chaos testing CLI that injects faults into your Kubernetes cluster, monitors health probes in real time, and **verifies your SLA properties automatically**.
+**heisensim** is a chaos testing CLI for Kubernetes that injects faults, monitors health probes, and **verifies your SLA properties automatically**. Exit code 1 when properties fail — CI-native.
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
