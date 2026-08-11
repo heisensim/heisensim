@@ -1,0 +1,158 @@
+name: E2E Preview Environment
+on:
+  # Manual dispatch and nightly — NOT on every PR.
+  # This is an integration smoke test for heisensim itself,
+  # not a per-PR gate (too slow/fragile for that).
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Test duration (e.g. 2m, 5m)"
+        default: "2m"
+      seeds:
+        description: "Number of seeds to explore (1-50)"
+        default: "5"
+  schedule:
+    - cron: '0 4 * * *'  # 4 AM UTC daily
+
+concurrency:
+  group: preview-e2e
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      # ── Build heisensim from source ────────────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build heisensim
+        run: |
+          cargo install --path crates/cli --locked
+          heisensim --version
+
+      # ── Spin up k3d cluster ────────────────────────────────────
+      - name: Create k3d cluster
+        env:
+          K3D_VERSION: v5.9.0
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/k3d-io/k3d/${K3D_VERSION}/install.sh" | TAG="${K3D_VERSION}" bash
+          k3d version
+          k3d cluster create preview --agents 2 --no-lb --timeout 120s
+          kubectl cluster-info
+
+      # ── Deploy demo app ────────────────────────────────────────
+      - name: Deploy demo app
+        working-directory: examples/k8s-demo
+        run: |
+          kubectl apply -f manifests.yaml
+          echo "⏳ Waiting for pods..."
+          kubectl wait --for=condition=ready pod --all \
+            -n heisensim-demo --timeout=120s
+          echo "✅ All pods ready:"
+          kubectl get pods -n heisensim-demo -o wide
+
+      # ── Generate RBAC ──────────────────────────────────────────
+      - name: Apply RBAC
+        run: |
+          heisensim rbac \
+            --namespace heisensim-demo \
+            --faults crash,latency,partition \
+          | kubectl apply -f -
+
+      # ── Run chaos test ─────────────────────────────────────────
+      - name: Run chaos test
+        id: chaos
+        working-directory: examples/k8s-demo
+        shell: bash
+        env:
+          INPUT_DURATION: ${{ github.event.inputs.duration || '2m' }}
+          INPUT_SEEDS: ${{ github.event.inputs.seeds || '5' }}
+        run: |
+          set -o pipefail
+
+          # Validate inputs — reject anything that isn't a safe value
+          if ! [[ "$INPUT_DURATION" =~ ^[0-9]+[smh]$ ]]; then
+            echo "::error::Invalid duration format: ${INPUT_DURATION}"
+            exit 1
+          fi
+          if ! [[ "$INPUT_SEEDS" =~ ^[0-9]+$ ]] || [ "$INPUT_SEEDS" -lt 1 ] || [ "$INPUT_SEEDS" -gt 50 ]; then
+            echo "::error::Seeds must be 1-50, got: ${INPUT_SEEDS}"
+            exit 1
+          fi
+
+          set +e
+          heisensim explore \
+            --namespace heisensim-demo \
+            --seeds "${INPUT_SEEDS}" \
+            --duration "${INPUT_DURATION}" \
+            --warmup 15s \
+            --faults crash,latency,partition \
+            --config heisensim.toml \
+            --output json 2>/dev/null | tee /tmp/heisensim-report.json
+          HEISENSIM_EXIT=${PIPESTATUS[0]}
+          TEE_EXIT=${PIPESTATUS[1]}
+          set -e
+
+          echo "exit-code=${HEISENSIM_EXIT}" >> $GITHUB_OUTPUT
+
+          # Also generate JUnit for GitHub test summary
+          heisensim run \
+            --namespace heisensim-demo \
+            --seed 42 \
+            --duration 30s \
+            --warmup 10s \
+            --faults crash,latency,partition \
+            --config heisensim.toml \
+            --output junit > /tmp/heisensim-junit.xml || true
+
+          # Fail if either heisensim or tee failed
+          if [ "${TEE_EXIT}" -ne 0 ]; then
+            echo "::warning::tee failed with exit code ${TEE_EXIT}, report may be incomplete"
+          fi
+          exit ${HEISENSIM_EXIT}
+
+      # ── Upload artifacts ───────────────────────────────────────
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: heisensim-report
+          path: |
+            /tmp/heisensim-report.json
+            /tmp/heisensim-junit.xml
+
+      # ── Job summary ──────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        env:
+          CHAOS_EXIT: ${{ steps.chaos.outputs.exit-code }}
+        run: |
+          if [ "${CHAOS_EXIT}" = "0" ]; then
+            echo "## ✅ E2E Chaos Test Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ E2E Chaos Test Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See uploaded artifacts for full JSON and JUnit reports." >> $GITHUB_STEP_SUMMARY
+
+      # ── Teardown ───────────────────────────────────────────────
+      - name: Teardown k3d cluster
+        if: always()
+        run: k3d cluster delete preview || true
