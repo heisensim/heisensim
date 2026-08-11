@@ -1,0 +1,187 @@
+name: Preview Environment
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Test duration"
+        default: "2m"
+      seeds:
+        description: "Number of seeds to explore"
+        default: "5"
+
+concurrency:
+  group: preview-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Build heisensim from source ────────────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build heisensim
+        run: |
+          cargo install --path crates/cli --locked
+          heisensim --version
+
+      # ── Spin up k3d cluster ────────────────────────────────────
+      - name: Create k3d cluster
+        uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: preview
+          args: --agents 2 --no-lb --timeout 120s
+
+      # ── Deploy demo app ────────────────────────────────────────
+      - name: Deploy demo app
+        working-directory: examples/k8s-demo
+        run: |
+          kubectl apply -f manifests.yaml
+          echo "⏳ Waiting for pods..."
+          kubectl wait --for=condition=ready pod --all \
+            -n heisensim-demo --timeout=120s
+          echo "✅ All pods ready:"
+          kubectl get pods -n heisensim-demo -o wide
+
+      # ── Generate RBAC ──────────────────────────────────────────
+      - name: Apply RBAC
+        run: |
+          heisensim rbac \
+            --namespace heisensim-demo \
+            --faults crash,latency,partition \
+          | kubectl apply -f -
+
+      # ── Run chaos test ─────────────────────────────────────────
+      - name: Run chaos test
+        id: chaos
+        working-directory: examples/k8s-demo
+        run: |
+          DURATION="${{ github.event.inputs.duration || '2m' }}"
+          SEEDS="${{ github.event.inputs.seeds || '5' }}"
+
+          set +e
+          heisensim explore \
+            --namespace heisensim-demo \
+            --seeds "${SEEDS}" \
+            --duration "${DURATION}" \
+            --warmup 15s \
+            --faults crash,latency,partition \
+            --config heisensim.toml \
+            --output json | tee /tmp/heisensim-report.json
+          EXIT_CODE=$?
+          set -e
+
+          echo "exit-code=${EXIT_CODE}" >> $GITHUB_OUTPUT
+
+          # Also generate JUnit for GitHub test summary
+          heisensim run \
+            --namespace heisensim-demo \
+            --seed 42 \
+            --duration 30s \
+            --warmup 10s \
+            --faults crash,latency,partition \
+            --config heisensim.toml \
+            --output junit > /tmp/heisensim-junit.xml || true
+
+          exit ${EXIT_CODE}
+
+      # ── Upload artifacts ───────────────────────────────────────
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heisensim-report
+          path: |
+            /tmp/heisensim-report.json
+            /tmp/heisensim-junit.xml
+
+      # ── PR comment with results ────────────────────────────────
+      - name: Comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '{}';
+            try {
+              report = fs.readFileSync('/tmp/heisensim-report.json', 'utf8');
+            } catch (e) {
+              report = '{"error": "Report not generated"}';
+            }
+
+            const exitCode = '${{ steps.chaos.outputs.exit-code }}';
+            const passed = exitCode === '0';
+            const icon = passed ? '✅' : '❌';
+            const status = passed ? 'All properties passed' : 'Some properties failed';
+
+            let body = `## ${icon} Chaos Test Results\n\n`;
+            body += `**Status:** ${status}\n`;
+            body += `**Exit code:** ${exitCode}\n\n`;
+
+            try {
+              const data = JSON.parse(report);
+              if (data.properties) {
+                body += '| Property | Result | Expected | Actual |\n';
+                body += '|:---------|:-------|:---------|:-------|\n';
+                for (const p of data.properties) {
+                  const r = p.passed ? '✅ PASS' : '❌ FAIL';
+                  body += `| ${p.property_name} | ${r} | ${p.expected} | ${p.actual} |\n`;
+                }
+              }
+            } catch (e) {
+              body += `\n<details><summary>Raw output</summary>\n\n\`\`\`json\n${report}\n\`\`\`\n</details>\n`;
+            }
+
+            body += `\n---\n*Tested with heisensim preview environment (k3d)*`;
+
+            // Find and update existing comment or create new
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const marker = '## ✅ Chaos Test Results\n\n';
+            const markerFail = '## ❌ Chaos Test Results\n\n';
+            const existing = comments.find(c =>
+              c.body.includes(marker) || c.body.includes(markerFail)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # ── Teardown ───────────────────────────────────────────────
+      - name: Teardown k3d cluster
+        if: always()
+        run: k3d cluster delete preview

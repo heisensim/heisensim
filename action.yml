@@ -1,5 +1,5 @@
 name: "heisensim"
-description: "Deterministic chaos testing for Kubernetes — inject faults, verify SLAs"
+description: "Continuous SLA validation for Kubernetes — inject faults, verify properties, in CI"
 author: "heisensim"
 
 branding:
