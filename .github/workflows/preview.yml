@@ -45,10 +45,10 @@ jobs:
 
       # ── Spin up k3d cluster ────────────────────────────────────
       - name: Create k3d cluster
-        uses: AbsaOSS/k3d-action@v2
-        with:
-          cluster-name: preview
-          args: --agents 2 --no-lb --timeout 120s
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d cluster create preview --agents 2 --no-lb --timeout 120s
+          kubectl cluster-info
 
       # ── Deploy demo app ────────────────────────────────────────
       - name: Deploy demo app
@@ -207,4 +207,4 @@ jobs:
       # ── Teardown ───────────────────────────────────────────────
       - name: Teardown k3d cluster
         if: always()
-        run: k3d cluster delete preview
+        run: k3d cluster delete preview || true
