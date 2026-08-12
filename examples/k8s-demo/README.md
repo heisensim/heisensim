@@ -29,7 +29,7 @@ That's it. `make all` will:
 2. Deploy the demo app (redis + 2× nginx)
 3. Wait for all pods to be healthy
 4. Generate and apply least-privilege RBAC
-5. Run a 2-minute chaos test with seed 42
+5. Run a 30-second chaos test with seed 42
 
 ## What You'll See
 
@@ -59,7 +59,7 @@ After faults, heisensim evaluates 5 SLA properties defined in [`heisensim.toml`]
 | Target | What it does |
 |:-------|:-------------|
 | `make all` | Full pipeline: setup → deploy → wait → rbac → run |
-| `make run` | Single chaos test (seed 42, 2m) |
+| `make run` | Single chaos test (seed 42, 30s) |
 | `make explore` | 10 random seeds — find edge cases |
 | `make rbac` | Generate & apply least-privilege K8s RBAC |
 | `make junit` | Run and save JUnit XML report |
