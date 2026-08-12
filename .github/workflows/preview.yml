@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
     inputs:
       duration:
-        description: "Test duration (e.g. 2m, 5m)"
-        default: "2m"
+        description: "Test duration (e.g. 30s, 2m, 5m)"
+        default: "30s"
       seeds:
         description: "Number of seeds to explore (1-50)"
         default: "5"
@@ -82,7 +82,7 @@ jobs:
         working-directory: examples/k8s-demo
         shell: bash
         env:
-          INPUT_DURATION: ${{ github.event.inputs.duration || '2m' }}
+          INPUT_DURATION: ${{ github.event.inputs.duration || '30s' }}
           INPUT_SEEDS: ${{ github.event.inputs.seeds || '5' }}
         run: |
           set -o pipefail

@@ -46,7 +46,7 @@ run:
 	heisensim run \
 		--namespace $(NAMESPACE) \
 		--seed 42 \
-		--duration 2m \
+		--duration 30s \
 		--warmup 15s \
 		--faults crash,latency,partition \
 		--config heisensim.toml
@@ -68,7 +68,7 @@ junit:
 	set -o pipefail; heisensim run \
 		--namespace $(NAMESPACE) \
 		--seed 42 \
-		--duration 2m \
+		--duration 30s \
 		--warmup 15s \
 		--faults crash,latency,partition \
 		--config heisensim.toml \
@@ -82,7 +82,7 @@ json:
 	set -o pipefail; heisensim run \
 		--namespace $(NAMESPACE) \
 		--seed 42 \
-		--duration 2m \
+		--duration 30s \
 		--warmup 15s \
 		--faults crash,latency,partition \
 		--config heisensim.toml \

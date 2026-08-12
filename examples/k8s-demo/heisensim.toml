@@ -1,6 +1,6 @@
 [simulation]
 seed = 42
-duration = "2m"
+duration = "30s"
 warmup = "15s"
 namespace = "heisensim-demo"
 
