@@ -4,6 +4,7 @@
 [![Release](https://github.com/heisensim/heisensim/actions/workflows/release.yml/badge.svg)](https://github.com/heisensim/heisensim/releases)
 [![Crates.io](https://img.shields.io/crates/v/heisensim.svg)](https://crates.io/crates/heisensim)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-MIT)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/heisensim/heisensim?quickstart=1)
 
 > **"Inject faults. Verify SLAs. In CI."**
 
