@@ -331,7 +331,6 @@ async fn main() -> Result<()> {
 
     // 3. Print ASCII banner (skip for machine-readable output)
     let is_machine_output = matches!(&cli.command, Commands::Rbac(_))
-        || matches!(&cli.command, Commands::Demo { .. })
         || matches!(
             &cli.command,
             Commands::Run(a) if a.output == OutputFormat::Json || a.output == OutputFormat::Junit
