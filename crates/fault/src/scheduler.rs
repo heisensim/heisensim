@@ -13,6 +13,10 @@ pub enum FaultType {
     Latency { delay_ms: u32, jitter_ms: u32 },
     /// Partition the target pod from the network.
     Partition,
+    /// Apply CPU/memory stress to the target pod.
+    Stress { cpu_workers: u32, mem_bytes: u64 },
+    /// Block DNS resolution on the target pod.
+    Dns,
 }
 
 /// A scheduled fault to be injected.
@@ -174,6 +178,11 @@ mod tests {
                 delay_ms: 10,
                 jitter_ms: 5,
             },
+            FaultType::Stress {
+                cpu_workers: 2,
+                mem_bytes: 1024,
+            },
+            FaultType::Dns,
         ];
         let pods = vec!["p1".to_string(), "p2".to_string(), "p3".to_string()];
         let mut s = FaultScheduler::new(42, faults.clone(), pods.clone(), "ns".to_string());
@@ -189,7 +198,7 @@ mod tests {
             seen_pods.insert(f.target_pod);
         }
 
-        assert_eq!(seen_faults.len(), 3);
+        assert_eq!(seen_faults.len(), 5);
         assert_eq!(seen_pods.len(), 3);
     }
 
@@ -211,7 +220,12 @@ mod tests {
     proptest! {
         #[test]
         fn pbt_next_fault_valid(seed in any::<u64>()) {
-            let faults = vec![FaultType::Crash, FaultType::Partition];
+            let faults = vec![
+                FaultType::Crash,
+                FaultType::Partition,
+                FaultType::Dns,
+                FaultType::Stress { cpu_workers: 1, mem_bytes: 1024 },
+            ];
             let pods = vec!["p1".to_string(), "p2".to_string()];
             let mut s = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
             for _ in 0..10 {
@@ -236,7 +250,12 @@ mod tests {
 
         #[test]
         fn pbt_determinism(seed in any::<u64>()) {
-            let faults = vec![FaultType::Crash, FaultType::Partition];
+            let faults = vec![
+                FaultType::Crash,
+                FaultType::Partition,
+                FaultType::Dns,
+                FaultType::Stress { cpu_workers: 1, mem_bytes: 1024 },
+            ];
             let pods = vec!["p1".to_string(), "p2".to_string()];
             let mut s1 = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
             let mut s2 = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());

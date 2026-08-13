@@ -103,7 +103,11 @@ struct RunArgs {
     #[arg(long)]
     k3d: bool,
 
-    #[arg(long, default_value = "crash,latency,partition", value_delimiter = ',')]
+    #[arg(
+        long,
+        default_value = "crash,latency,partition,stress,dns",
+        value_delimiter = ','
+    )]
     faults: Vec<String>,
 
     /// Method for injecting network faults into pods.
@@ -205,7 +209,11 @@ struct ExploreArgs {
     parallel: usize,
 
     /// Fault types to inject
-    #[arg(long, default_value = "crash,latency,partition", value_delimiter = ',')]
+    #[arg(
+        long,
+        default_value = "crash,latency,partition,stress,dns",
+        value_delimiter = ','
+    )]
     faults: Vec<String>,
 
     /// Method for injecting network faults
@@ -568,6 +576,33 @@ async fn handle_run(
                     warn!("  Only one pod, skipping partition.");
                 }
             }
+            "stress" => {
+                let workers: u32 = rng.random_range(1..4);
+                let mem: u64 = rng.random_range(32..128) * 1024 * 1024;
+                info!("🔥 Injecting CPU/memory stress on {}", target.name);
+                match fault_op
+                    .inject_stress(&args.namespace, &target.name, workers, mem, 15.0)
+                    .await
+                {
+                    Ok(id) => info!(
+                        "  Fault {}: {}x CPU + {}MB RAM for 15s",
+                        id,
+                        workers,
+                        mem / (1024 * 1024)
+                    ),
+                    Err(e) => warn!("  Failed to inject stress: {}", e),
+                }
+            }
+            "dns" => {
+                info!("🌐 Injecting DNS blackhole on {}", target.name);
+                match fault_op
+                    .inject_dns_failure(&args.namespace, &target.name, 15.0)
+                    .await
+                {
+                    Ok(id) => info!("  Fault {}: DNS blocked for 15s", id),
+                    Err(e) => warn!("  Failed to inject DNS fault: {}", e),
+                }
+            }
             other => {
                 warn!("Unknown fault type '{}', skipping.", other);
             }
@@ -708,6 +743,8 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
         "crash".to_string(),
         "latency".to_string(),
         "partition".to_string(),
+        "stress".to_string(),
+        "dns".to_string(),
     ];
 
     let _result = run_single_simulation(
@@ -993,6 +1030,18 @@ async fn run_single_simulation(
                         .inject_partition(namespace, &target.name, other_ip, 20.0)
                         .await;
                 }
+            }
+            "stress" => {
+                let workers: u32 = rng.random_range(1..4);
+                let mem: u64 = rng.random_range(32..128) * 1024 * 1024;
+                let _ = fault_op
+                    .inject_stress(namespace, &target.name, workers, mem, 15.0)
+                    .await;
+            }
+            "dns" => {
+                let _ = fault_op
+                    .inject_dns_failure(namespace, &target.name, 15.0)
+                    .await;
             }
             _ => {}
         }

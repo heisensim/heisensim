@@ -8,10 +8,15 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
         if fault == "crash" && !pod_verbs.contains(&"delete") {
             pod_verbs.push("delete");
         }
-        if fault == "latency" || fault == "partition" {
+        if fault == "latency" || fault == "partition" || fault == "stress" || fault == "dns" {
             has_exec = true;
         }
-        if fault == "debug" {
+        if fault == "latency"
+            || fault == "partition"
+            || fault == "stress"
+            || fault == "dns"
+            || fault == "debug"
+        {
             has_ephemeral = true;
         }
     }
@@ -94,6 +99,8 @@ mod tests {
                 "crash".to_string(),
                 "latency".to_string(),
                 "debug".to_string(),
+                "stress".to_string(),
+                "dns".to_string(),
             ],
             "heisensim",
         );

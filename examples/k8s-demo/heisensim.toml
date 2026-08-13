@@ -5,7 +5,8 @@ warmup = "15s"
 namespace = "heisensim-demo"
 
 [faults]
-enabled = ["crash", "latency", "partition"]
+# Note: config-driven fault selection is a future feature, currently not used by the runtime
+enabled = ["crash", "latency", "partition", "stress", "dns"]
 crash_probability = 0.1
 latency_ms = 300
 latency_jitter_ms = 100
