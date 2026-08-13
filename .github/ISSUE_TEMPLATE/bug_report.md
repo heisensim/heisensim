@@ -1,30 +1,35 @@
 ---
 name: Bug Report
-about: Report a bug
-title: ''
-labels: ''
+about: Report a bug or unexpected behavior
+title: "[Bug] "
+labels: bug
 assignees: ''
 ---
 
 ## Description
-A clear and concise description of what the bug is.
+
+A clear and concise description of the bug.
 
 ## Steps to Reproduce
-Steps to reproduce the behavior:
-1. Run command '...'
-2. Apply scenario '...'
-3. See error
+
+1. Run `heisensim ...`
+2. See error
 
 ## Expected Behavior
-A clear and concise description of what you expected to happen.
+
+What you expected to happen.
 
 ## Actual Behavior
-A clear and concise description of what actually happened.
+
+What actually happened. Include terminal output if possible.
 
 ## Environment
-- **heisensim version**: 
-- **Kubernetes version**: 
-- **OS**: 
+
+- **heisensim version**: `heisensim --version`
+- **OS**: e.g., macOS 15, Ubuntu 24.04
+- **Kubernetes**: e.g., k3d v5.9.0, EKS 1.30
+- **Docker**: `docker --version`
 
 ## Additional Context
-Add any other context about the problem here.
+
+Seed, config file, or any other context.
