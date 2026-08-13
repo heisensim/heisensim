@@ -1,88 +1,78 @@
-name: "heisensim"
-description: "Deterministic chaos testing for Kubernetes with automatic SLA verification"
-author: "heisensim"
-
-branding:
-  icon: "zap"
-  color: "purple"
+name: 'heisensim'
+description: 'Run heisensim chaos tests in your CI'
 
 inputs:
-  namespace:
-    description: "Target Kubernetes namespace"
-    required: true
-  duration:
-    description: "Test duration (e.g. 2m, 5m)"
-    default: "5m"
-  seed:
-    description: "Deterministic seed (omit for random)"
-    required: false
   config:
-    description: "Path to heisensim.toml config file"
-    required: false
-  faults:
-    description: "Comma-separated fault types (crash,latency,partition)"
-    default: "crash,latency"
-  warmup:
-    description: "Warmup period before fault injection"
-    default: "30s"
-  output:
-    description: "Output format (terminal, json, markdown)"
-    default: "json"
+    description: 'Path to heisensim.toml config file'
+    required: true
   version:
-    description: "heisensim version (Docker tag)"
-    default: "latest"
-  args:
-    description: "Additional arguments to pass to heisensim"
+    description: 'heisensim version to install'
     required: false
-
-outputs:
-  exit-code:
-    description: "Exit code (0 = all properties pass, 1 = failure)"
-    value: ${{ steps.run.outputs.exit-code }}
-  report:
-    description: "Path to the JSON report file"
-    value: ${{ steps.run.outputs.report }}
+    default: 'latest'
+  args:
+    description: 'Additional arguments to pass to heisensim run'
+    required: false
+  upload-results:
+    description: 'Upload JUnit XML as artifact'
+    required: false
+    default: 'true'
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
-    - name: Run heisensim
-      id: run
+    - name: Detect platform
+      id: platform
       shell: bash
       run: |
-        REPORT_PATH="${RUNNER_TEMP}/heisensim-report.json"
-
-        ARGS="run"
-        ARGS="${ARGS} --namespace ${{ inputs.namespace }}"
-        ARGS="${ARGS} --duration ${{ inputs.duration }}"
-        ARGS="${ARGS} --warmup ${{ inputs.warmup }}"
-        ARGS="${ARGS} --faults ${{ inputs.faults }}"
-        ARGS="${ARGS} --output ${{ inputs.output }}"
-
-        if [ -n "${{ inputs.seed }}" ]; then
-          ARGS="${ARGS} --seed ${{ inputs.seed }}"
+        OS="${{ runner.os }}"
+        ARCH="${{ runner.arch }}"
+        
+        if [ "$OS" = "Linux" ] && [ "$ARCH" = "X64" ]; then
+          TARGET="x86_64-unknown-linux-gnu"
+        elif [ "$OS" = "Linux" ] && [ "$ARCH" = "ARM64" ]; then
+          TARGET="aarch64-unknown-linux-gnu"
+        elif [ "$OS" = "macOS" ] && [ "$ARCH" = "X64" ]; then
+          TARGET="x86_64-apple-darwin"
+        elif [ "$OS" = "macOS" ] && [ "$ARCH" = "ARM64" ]; then
+          TARGET="aarch64-apple-darwin"
+        elif [ "$OS" = "Windows" ] && [ "$ARCH" = "X64" ]; then
+          TARGET="x86_64-pc-windows-msvc"
+        else
+          echo "Unsupported platform: $OS $ARCH"
+          exit 1
         fi
+        echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
-        if [ -n "${{ inputs.config }}" ]; then
-          ARGS="${ARGS} --config ${{ inputs.config }}"
+    - name: Determine version
+      id: version
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          VERSION=$(curl -sL https://api.github.com/repos/heisensim/heisensim/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         fi
+        VERSION="${VERSION#v}"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-        if [ -n "${{ inputs.args }}" ]; then
-          ARGS="${ARGS} ${{ inputs.args }}"
-        fi
+    - name: Install
+      shell: bash
+      run: |
+        TARGET="${{ steps.platform.outputs.target }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        URL="https://github.com/heisensim/heisensim/releases/download/v${VERSION}/heisensim-v${VERSION}-${TARGET}.tar.gz"
+        
+        mkdir -p "$RUNNER_TEMP/heisensim"
+        curl -sL "$URL" | tar -xz -C "$RUNNER_TEMP/heisensim"
+        echo "$RUNNER_TEMP/heisensim" >> "$GITHUB_PATH"
 
-        set +e
-        docker run --rm \
-          --network host \
-          -v "${HOME}/.kube:/root/.kube:ro" \
-          -v "$(pwd):/workspace:ro" \
-          -w /workspace \
-          "ghcr.io/heisensim/heisensim:${{ inputs.version }}" \
-          ${ARGS} | tee "${REPORT_PATH}"
-        EXIT_CODE=$?
-        set -e
+    - name: Run
+      shell: bash
+      run: |
+        heisensim run --config "${{ inputs.config }}" --output junit ${{ inputs.args }}
 
-        echo "exit-code=${EXIT_CODE}" >> $GITHUB_OUTPUT
-        echo "report=${REPORT_PATH}" >> $GITHUB_OUTPUT
-
-        exit ${EXIT_CODE}
+    - name: Upload results
+      if: ${{ inputs.upload-results == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: heisensim-results
+        path: junit.xml
