@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use heisensim_props::{
-    Availability, ErrorBudget, LatencyThreshold, NoCascade, PropertyVerdict, RecoveryTime,
-    TimelineChecker, TimelineProperty,
+    Availability, DnsResolution, ErrorBudget, LatencyThreshold, NoCascade, PropertyVerdict,
+    RecoveryTime, SteadyState, Throughput, TimelineChecker, TimelineProperty,
 };
 use serde::Deserialize;
 
@@ -22,6 +22,11 @@ pub struct PropertyDef {
     pub min_percent: Option<f64>,
     // Error budget
     pub max_consecutive: Option<u32>,
+    // Steady state
+    pub max_recovery_seconds: Option<f64>,
+    pub baseline_seconds: Option<f64>,
+    // Throughput
+    pub min_per_minute: Option<f64>,
     // Cascade
     pub window_seconds: Option<f64>,
     pub allowed_failing_probes: Option<Vec<String>>,
@@ -87,8 +92,32 @@ pub fn build_checker(defs: &[PropertyDef]) -> Result<TimelineChecker> {
                 }
                 Box::new(prop)
             }
+            "throughput" => {
+                let min = def
+                    .min_per_minute
+                    .context("throughput requires 'min_per_minute'")?;
+                let window = def
+                    .window_seconds
+                    .context("throughput requires 'window_seconds'")?;
+                Box::new(Throughput::new(&def.name, min, window))
+            }
+            "steady-state" => {
+                let max_rec = def
+                    .max_recovery_seconds
+                    .context("steady-state requires 'max_recovery_seconds'")?;
+                let base = def
+                    .baseline_seconds
+                    .context("steady-state requires 'baseline_seconds'")?;
+                Box::new(SteadyState::new(&def.name, max_rec, base))
+            }
+            "dns-resolution" => {
+                let max_rec = def
+                    .max_recovery_seconds
+                    .context("dns-resolution requires 'max_recovery_seconds'")?;
+                Box::new(DnsResolution::new(&def.name, max_rec))
+            }
             other => anyhow::bail!(
-                "Unknown property type: '{}'. Supported: recovery_time, availability, error_budget, no_cascade, latency_p99",
+                "Unknown property type: '{}'. Supported: recovery_time, availability, error_budget, no_cascade, latency_p99, throughput, steady-state, dns-resolution",
                 other
             ),
         };

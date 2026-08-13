@@ -22,17 +22,23 @@ pub mod availability;
 pub mod builtin;
 pub mod cascade;
 pub mod checker;
+pub mod dns_resolution;
 pub mod error_budget;
 pub mod latency;
 pub mod recovery;
+pub mod steady_state;
+pub mod throughput;
 pub mod timeline;
 
 // Timeline properties (primary API for K8s chaos)
 pub use availability::Availability;
 pub use cascade::NoCascade;
+pub use dns_resolution::DnsResolution;
 pub use error_budget::ErrorBudget;
 pub use latency::LatencyThreshold;
 pub use recovery::RecoveryTime;
+pub use steady_state::SteadyState;
+pub use throughput::Throughput;
 pub use timeline::{PropertyVerdict, TimelineChecker, TimelineProperty};
 
 // Simulation properties (existing)
