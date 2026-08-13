@@ -13,6 +13,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod demo;
 mod metrics;
 mod properties;
 mod rbac;
@@ -62,6 +63,21 @@ enum Commands {
 
     /// Generate least-privilege RBAC manifests
     Rbac(RbacArgs),
+
+    /// Run a self-contained demo (creates k3d cluster, deploys app, runs chaos test, tears down)
+    Demo {
+        /// Keep the cluster running after the test (don't tear down)
+        #[arg(long)]
+        keep: bool,
+
+        /// Override seed (skips explore, runs single seed)
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Duration of each chaos test
+        #[arg(long, default_value = "30s")]
+        duration: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -342,6 +358,11 @@ async fn main() -> Result<()> {
             handle_rbac(args).await?;
             0
         }
+        Commands::Demo {
+            keep,
+            seed,
+            duration,
+        } => demo::run_demo(keep, seed, &duration).await?,
     };
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
