@@ -358,4 +358,166 @@ impl FaultOperator {
         info!(pod = pod_name, target = target_ip, "Reverted partition");
         Ok(())
     }
+
+    /// Inject CPU/memory stress using stress-ng.
+    pub async fn inject_stress(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        cpu_workers: u32,
+        mem_bytes: u64,
+        duration_secs: f64,
+    ) -> Result<Uuid> {
+        let fault_id = Uuid::new_v4();
+        let target = format!("{}/{}", namespace, pod_name);
+
+        let _span = tracing::info_span!(
+            "fault.inject",
+            fault.id = %fault_id,
+            fault.kind = "stress",
+            fault.target = %target,
+            fault.duration_secs = duration_secs,
+            otel.name = format!("inject stress → {}", pod_name),
+        );
+        let _guard = _span.enter();
+
+        self.timeline.emit(EventKind::FaultInjected {
+            fault_id,
+            fault_kind: "stress".to_string(),
+            target,
+            duration_secs: Some(duration_secs),
+        });
+        drop(_guard); // Drop span before async spawn setup
+
+        let client_clone = self.client.clone();
+        let timeline_clone = self.timeline.clone();
+        let ns = namespace.to_string();
+        let pn = pod_name.to_string();
+        let inject_method = self.inject_method;
+
+        let cpu_str = cpu_workers.to_string();
+        let mem_str = mem_bytes.to_string();
+        let duration_str = duration_secs.to_string();
+
+        tokio::spawn(async move {
+            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
+            let duration_formatted = format!("{}s", duration_str);
+            let command = vec![
+                "stress-ng",
+                "--cpu",
+                &cpu_str,
+                "--vm",
+                "1",
+                "--vm-bytes",
+                &mem_str,
+                "--timeout",
+                &duration_formatted,
+                "--quiet",
+            ];
+
+            if let Err(e) = op.exec_network_command(&ns, &pn, &command).await {
+                warn!(pod = pn.as_str(), error = %e, "Failed to inject stress");
+            }
+
+            op.timeline.emit(EventKind::FaultReverted { fault_id });
+            info!(pod = pn.as_str(), "Stress completed");
+        });
+
+        Ok(fault_id)
+    }
+
+    /// Inject DNS failure using iptables.
+    pub async fn inject_dns_failure(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        duration_secs: f64,
+    ) -> Result<Uuid> {
+        let fault_id = Uuid::new_v4();
+        let target = format!("{}/{}", namespace, pod_name);
+
+        let _span = tracing::info_span!(
+            "fault.inject",
+            fault.id = %fault_id,
+            fault.kind = "dns_failure",
+            fault.target = %target,
+            fault.duration_secs = duration_secs,
+            otel.name = format!("inject dns failure → {}", pod_name),
+        );
+        let _guard = _span.enter();
+
+        drop(_guard); // Drop before await
+
+        self.exec_network_command(
+            namespace,
+            pod_name,
+            &[
+                "iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "DROP",
+            ],
+        )
+        .await?;
+
+        self.exec_network_command(
+            namespace,
+            pod_name,
+            &[
+                "iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP",
+            ],
+        )
+        .await?;
+
+        self.timeline.emit(EventKind::FaultInjected {
+            fault_id,
+            fault_kind: "dns_failure".to_string(),
+            target,
+            duration_secs: Some(duration_secs),
+        });
+
+        let client_clone = self.client.clone();
+        let timeline_clone = self.timeline.clone();
+        let ns = namespace.to_string();
+        let pn = pod_name.to_string();
+        let inject_method = self.inject_method;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs_f64(duration_secs)).await;
+
+            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
+            if let Err(e) = op.revert_dns_failure(&ns, &pn, fault_id).await {
+                warn!(pod = pn.as_str(), error = %e, "Failed to revert DNS failure");
+            }
+        });
+
+        Ok(fault_id)
+    }
+
+    /// Revert DNS failure.
+    pub async fn revert_dns_failure(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        fault_id: Uuid,
+    ) -> Result<()> {
+        self.exec_network_command(
+            namespace,
+            pod_name,
+            &[
+                "iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "DROP",
+            ],
+        )
+        .await?;
+
+        self.exec_network_command(
+            namespace,
+            pod_name,
+            &[
+                "iptables", "-D", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP",
+            ],
+        )
+        .await?;
+
+        self.timeline.emit(EventKind::FaultReverted { fault_id });
+        info!(pod = pod_name, "Reverted DNS failure");
+        Ok(())
+    }
 }
