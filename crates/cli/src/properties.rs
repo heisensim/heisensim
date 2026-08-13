@@ -117,7 +117,7 @@ pub fn build_checker(defs: &[PropertyDef]) -> Result<TimelineChecker> {
                 Box::new(DnsResolution::new(&def.name, max_rec))
             }
             other => anyhow::bail!(
-                "Unknown property type: '{}'. Supported: recovery_time, availability, error_budget, no_cascade, latency_p99, throughput, steady-state, dns-resolution",
+                "Unknown property type: '{}'. Supported: recovery_time, availability, error_budget, no_cascade, latency_p99, latency, throughput, steady-state, dns-resolution",
                 other
             ),
         };

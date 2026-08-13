@@ -11,6 +11,10 @@ pub struct DnsResolution {
 
 impl DnsResolution {
     pub fn new(name: impl Into<String>, max_recovery_seconds: f64) -> Self {
+        assert!(
+            max_recovery_seconds > 0.0 && max_recovery_seconds.is_finite(),
+            "max_recovery_seconds must be positive and finite"
+        );
         Self {
             name: name.into(),
             max_recovery_seconds,
@@ -73,7 +77,7 @@ impl TimelineProperty for DnsResolution {
                         if recovery_time > max_recovery_dur {
                             any_failed = true;
                             details.push(format!(
-                                "  ❌ DNS fault {}: recovered in {:.1}s (exceeds {:.0}s)",
+                                "  ❌ DNS fault {}: recovered in {:.1}s (exceeds {}s)",
                                 fault_id,
                                 recovery_time.as_secs_f64(),
                                 self.max_recovery_seconds
@@ -99,7 +103,7 @@ impl TimelineProperty for DnsResolution {
             }
         }
 
-        let expected = format!("recovery < {:.0}s", self.max_recovery_seconds);
+        let expected = format!("recovery <= {}s", self.max_recovery_seconds);
         let actual = match worst_recovery {
             Some(d) => format!("{:.1}s", d.as_secs_f64()),
             None => "never recovered".to_string(),
@@ -192,5 +196,26 @@ mod tests {
         let prop = DnsResolution::new("dns", 10.0);
         let verdict = prop.evaluate(&events);
         assert!(verdict.passed);
+    }
+
+    #[test]
+    fn test_dns_no_recovery() {
+        let fid = Uuid::new_v4();
+        let events = vec![
+            event(
+                10.0,
+                EventKind::FaultInjected {
+                    fault_id: fid,
+                    fault_kind: "dns-block".into(),
+                    target: "redis".into(),
+                    duration_secs: None,
+                },
+            ),
+            event(20.0, EventKind::FaultReverted { fault_id: fid }),
+        ];
+
+        let prop = DnsResolution::new("dns", 10.0);
+        let verdict = prop.evaluate(&events);
+        assert!(!verdict.passed, "Expected fail for no recovery");
     }
 }

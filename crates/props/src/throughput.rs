@@ -11,6 +11,14 @@ pub struct Throughput {
 
 impl Throughput {
     pub fn new(name: impl Into<String>, min_per_minute: f64, window_seconds: f64) -> Self {
+        assert!(
+            window_seconds > 0.0 && window_seconds.is_finite(),
+            "window_seconds must be positive and finite"
+        );
+        assert!(
+            min_per_minute >= 0.0 && min_per_minute.is_finite(),
+            "min_per_minute must be non-negative and finite"
+        );
         Self {
             name: name.into(),
             min_per_minute,

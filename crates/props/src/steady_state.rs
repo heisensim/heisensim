@@ -1,5 +1,6 @@
 use crate::timeline::{PropertyVerdict, TimelineProperty};
 use heisensim_timeline::event::{EventKind, TimelineEvent};
+use std::collections::HashSet;
 use std::time::Duration;
 
 /// Asserts the system returns to pre-fault behavior within `max_recovery_seconds`.
@@ -11,6 +12,14 @@ pub struct SteadyState {
 
 impl SteadyState {
     pub fn new(name: impl Into<String>, max_recovery_seconds: f64, baseline_seconds: f64) -> Self {
+        assert!(
+            max_recovery_seconds > 0.0 && max_recovery_seconds.is_finite(),
+            "max_recovery_seconds must be positive and finite"
+        );
+        assert!(
+            baseline_seconds > 0.0 && baseline_seconds.is_finite(),
+            "baseline_seconds must be positive and finite"
+        );
         Self {
             name: name.into(),
             max_recovery_seconds,
@@ -43,11 +52,17 @@ impl TimelineProperty for SteadyState {
         let baseline_rate = baseline_count as f64 / self.baseline_seconds;
 
         // 2. Find the last FaultReverted event
-        let last_revert = events
-            .iter()
-            .filter(|e| matches!(e.kind, EventKind::FaultReverted { .. }))
-            .map(|e| e.elapsed)
-            .max();
+        let mut active_faults = HashSet::new();
+        let mut last_revert = None;
+        for e in events {
+            if let EventKind::FaultInjected { fault_id, .. } = &e.kind {
+                active_faults.insert(*fault_id);
+            } else if let EventKind::FaultReverted { fault_id } = &e.kind {
+                if active_faults.remove(fault_id) && active_faults.is_empty() {
+                    last_revert = Some(e.elapsed);
+                }
+            }
+        }
 
         if let Some(revert_time) = last_revert {
             // We need to find at least one window of size `baseline_seconds`
