@@ -35,8 +35,6 @@ runs:
           TARGET="x86_64-apple-darwin"
         elif [ "$OS" = "macOS" ] && [ "$ARCH" = "ARM64" ]; then
           TARGET="aarch64-apple-darwin"
-        elif [ "$OS" = "Windows" ] && [ "$ARCH" = "X64" ]; then
-          TARGET="x86_64-pc-windows-msvc"
         else
           echo "Unsupported platform: $OS $ARCH"
           exit 1
@@ -46,8 +44,10 @@ runs:
     - name: Determine version
       id: version
       shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
-        VERSION="${{ inputs.version }}"
+        VERSION="$INPUT_VERSION"
         if [ "$VERSION" = "latest" ]; then
           VERSION=$(curl -sL https://api.github.com/repos/heisensim/heisensim/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         fi
@@ -59,19 +59,28 @@ runs:
       run: |
         TARGET="${{ steps.platform.outputs.target }}"
         VERSION="${{ steps.version.outputs.version }}"
-        URL="https://github.com/heisensim/heisensim/releases/download/v${VERSION}/heisensim-v${VERSION}-${TARGET}.tar.gz"
+        BASE_URL="https://github.com/heisensim/heisensim/releases/download/v${VERSION}"
+        ARCHIVE="heisensim-v${VERSION}-${TARGET}.tar.gz"
+        URL="${BASE_URL}/${ARCHIVE}"
         
         mkdir -p "$RUNNER_TEMP/heisensim"
-        curl -sL "$URL" | tar -xz -C "$RUNNER_TEMP/heisensim"
+        curl -sL "$URL" -o "$RUNNER_TEMP/heisensim/${ARCHIVE}"
+        curl -sL "${BASE_URL}/SHA256SUMS" -o "$RUNNER_TEMP/heisensim/SHA256SUMS"
+        cd "$RUNNER_TEMP/heisensim"
+        grep "${ARCHIVE}" SHA256SUMS | sha256sum -c -
+        tar -xzf "${ARCHIVE}"
         echo "$RUNNER_TEMP/heisensim" >> "$GITHUB_PATH"
 
     - name: Run
       shell: bash
+      env:
+        HEISENSIM_CONFIG: ${{ inputs.config }}
+        HEISENSIM_ARGS: ${{ inputs.args }}
       run: |
-        heisensim run --config "${{ inputs.config }}" --output junit ${{ inputs.args }}
+        heisensim run --config "$HEISENSIM_CONFIG" --output junit $HEISENSIM_ARGS
 
     - name: Upload results
-      if: ${{ inputs.upload-results == 'true' }}
+      if: ${{ inputs.upload-results == 'true' && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: heisensim-results
