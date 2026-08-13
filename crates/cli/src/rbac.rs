@@ -11,7 +11,12 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
         if fault == "latency" || fault == "partition" || fault == "stress" || fault == "dns" {
             has_exec = true;
         }
-        if fault == "debug" {
+        if fault == "latency"
+            || fault == "partition"
+            || fault == "stress"
+            || fault == "dns"
+            || fault == "debug"
+        {
             has_ephemeral = true;
         }
     }

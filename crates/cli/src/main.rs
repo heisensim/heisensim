@@ -1031,6 +1031,18 @@ async fn run_single_simulation(
                         .await;
                 }
             }
+            "stress" => {
+                let workers: u32 = rng.random_range(1..4);
+                let mem: u64 = rng.random_range(32..128) * 1024 * 1024;
+                let _ = fault_op
+                    .inject_stress(namespace, &target.name, workers, mem, 15.0)
+                    .await;
+            }
+            "dns" => {
+                let _ = fault_op
+                    .inject_dns_failure(namespace, &target.name, 15.0)
+                    .await;
+            }
             _ => {}
         }
     }

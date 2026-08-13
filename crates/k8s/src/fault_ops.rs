@@ -457,14 +457,28 @@ impl FaultOperator {
         )
         .await?;
 
-        self.exec_network_command(
-            namespace,
-            pod_name,
-            &[
-                "iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP",
-            ],
-        )
-        .await?;
+        if let Err(e) = self
+            .exec_network_command(
+                namespace,
+                pod_name,
+                &[
+                    "iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP",
+                ],
+            )
+            .await
+        {
+            // Attempt to revert the UDP rule if TCP failed
+            let _ = self
+                .exec_network_command(
+                    namespace,
+                    pod_name,
+                    &[
+                        "iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "DROP",
+                    ],
+                )
+                .await;
+            return Err(e);
+        }
 
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
@@ -498,26 +512,42 @@ impl FaultOperator {
         pod_name: &str,
         fault_id: Uuid,
     ) -> Result<()> {
-        self.exec_network_command(
-            namespace,
-            pod_name,
-            &[
-                "iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "DROP",
-            ],
-        )
-        .await?;
+        let mut errs = Vec::new();
 
-        self.exec_network_command(
-            namespace,
-            pod_name,
-            &[
-                "iptables", "-D", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP",
-            ],
-        )
-        .await?;
+        if let Err(e) = self
+            .exec_network_command(
+                namespace,
+                pod_name,
+                &[
+                    "iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "DROP",
+                ],
+            )
+            .await
+        {
+            errs.push(e);
+        }
+
+        if let Err(e) = self
+            .exec_network_command(
+                namespace,
+                pod_name,
+                &[
+                    "iptables", "-D", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP",
+                ],
+            )
+            .await
+        {
+            errs.push(e);
+        }
 
         self.timeline.emit(EventKind::FaultReverted { fault_id });
         info!(pod = pod_name, "Reverted DNS failure");
+
+        if !errs.is_empty() {
+            // Return first error, but we still attempted both
+            return Err(errs.remove(0).context("Failed to revert DNS failure rules"));
+        }
+
         Ok(())
     }
 }
