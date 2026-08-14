@@ -59,17 +59,20 @@ pub fn run_mock_simulation(
         elapsed += 1.0;
     }
 
-    let fault_count = rng.random_range(2..=5);
     let mut fault_times = Vec::new();
-    for _ in 0..fault_count {
-        if total_secs * 0.8 > warmup_secs {
+    if total_secs * 0.8 <= warmup_secs {
+        warn!("warmup duration is >= 80% of total duration; no faults will be generated");
+    } else {
+        let fault_count = rng.random_range(2..=5);
+        for _ in 0..fault_count {
             let fault_time = rng.random_range(warmup_secs..total_secs * 0.8);
-            fault_times.push(fault_time);
+            let fault_duration = rng.random_range(5.0..20.0);
+            fault_times.push((fault_time, fault_duration));
         }
     }
-    fault_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    fault_times.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    for fault_time in &fault_times {
+    for (fault_time, fault_duration) in &fault_times {
         let target = &pods[rng.random_range(0..pods.len())];
         let fault_type = if faults.is_empty() {
             "crash".to_string()
@@ -77,14 +80,13 @@ pub fn run_mock_simulation(
             faults[rng.random_range(0..faults.len())].clone()
         };
         let fault_id = Uuid::new_v4();
-        let fault_duration = rng.random_range(5.0..20.0);
 
         emit_at(
             EventKind::FaultInjected {
                 fault_id,
                 fault_kind: fault_type.clone(),
                 target: target.clone(),
-                duration_secs: Some(fault_duration),
+                duration_secs: Some(*fault_duration),
             },
             *fault_time,
         );
@@ -100,7 +102,7 @@ pub fn run_mock_simulation(
         for pod in &pods {
             let under_fault = fault_times
                 .iter()
-                .any(|ft| elapsed >= *ft && elapsed < ft + 15.0);
+                .any(|(ft, fd)| elapsed >= *ft && elapsed < ft + fd);
 
             if under_fault && rng.random_bool(0.3) {
                 emit_at(
@@ -246,6 +248,10 @@ pub async fn handle_mock_explore(args: &ExploreArgs) -> Result<i32> {
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
+    if args.bisect {
+        warn!("--bisect is not performed in mock mode");
+    }
+
     if args.output == OutputFormat::Text {
         println!("╔══════════════════════════════════════════════════════════════╗");
         println!(
@@ -378,50 +384,56 @@ pub async fn handle_mock_explore(args: &ExploreArgs) -> Result<i32> {
                 let passed = result.verdicts.iter().filter(|v| v.passed).count();
                 format!("  │  props: {}/{}", passed, result.verdicts.len())
             };
-            println!(
-                "  {} seed 0x{:04X}  │  faults: {}  │  failures: {}{}",
-                icon, seed, result.total_faults, result.total_failures, props_str
-            );
+            if args.output == OutputFormat::Text {
+                println!(
+                    "  {} seed 0x{:04X}  │  faults: {}  │  failures: {}{}",
+                    icon, seed, result.total_faults, result.total_failures, props_str
+                );
+            }
 
             results.push(result);
             info!(seed = seed, "✅ Seed 0x{:04X} complete.", seed);
         }
     }
 
-    println!();
-    println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║  EXPLORE SUMMARY (MOCK)                                    ║");
-    println!("╠══════════════════════════════════════════════════════════════╣");
-    println!(
-        "║  Seeds tested: {:4}  │  Interesting: {:4}                   ║",
-        results.len(),
-        interesting_seeds.len()
-    );
-    println!("╚══════════════════════════════════════════════════════════════╝");
-
-    if args.explore_strategy == crate::ExploreStrategyArg::Coverage {
-        println!("\n{}", explorer.coverage_summary());
-    }
-
-    if !interesting_seeds.is_empty() {
+    if args.output == OutputFormat::Text {
         println!();
-        println!("🐛 Interesting seeds (found fault→failure correlations or property violations):");
-        for &seed in &interesting_seeds {
-            let result = results.iter().find(|r| r.seed == seed).unwrap();
-            println!("  seed 0x{:04X}:", seed);
-            for finding in &result.findings {
-                println!("    → {}", finding);
-            }
-            for verdict in result.verdicts.iter().filter(|v| !v.passed) {
-                println!(
-                    "    ❌ {}: {} (actual: {})",
-                    verdict.property_name, verdict.expected, verdict.actual
-                );
-            }
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║  EXPLORE SUMMARY (MOCK)                                    ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!(
+            "║  Seeds tested: {:4}  │  Interesting: {:4}                   ║",
+            results.len(),
+            interesting_seeds.len()
+        );
+        println!("╚══════════════════════════════════════════════════════════════╝");
+
+        if args.explore_strategy == crate::ExploreStrategyArg::Coverage {
+            println!("\n{}", explorer.coverage_summary());
         }
-    } else {
-        println!();
-        println!("No interesting findings. Try more seeds or longer duration.");
+
+        if !interesting_seeds.is_empty() {
+            println!();
+            println!(
+                "🐛 Interesting seeds (found fault→failure correlations or property violations):"
+            );
+            for &seed in &interesting_seeds {
+                let result = results.iter().find(|r| r.seed == seed).unwrap();
+                println!("  seed 0x{:04X}:", seed);
+                for finding in &result.findings {
+                    println!("    → {}", finding);
+                }
+                for verdict in result.verdicts.iter().filter(|v| !v.passed) {
+                    println!(
+                        "    ❌ {}: {} (actual: {})",
+                        verdict.property_name, verdict.expected, verdict.actual
+                    );
+                }
+            }
+        } else {
+            println!();
+            println!("No interesting findings. Try more seeds or longer duration.");
+        }
     }
 
     let any_prop_failures = results.iter().any(|r| r.verdicts.iter().any(|v| !v.passed));
