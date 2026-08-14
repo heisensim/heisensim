@@ -18,6 +18,7 @@ mod metrics;
 mod properties;
 mod rbac;
 mod report;
+mod report_html;
 
 /// ASCII art banner printed on CLI startup.
 const BANNER: &str = r#"
@@ -144,6 +145,8 @@ enum OutputFormat {
     Json,
     /// JUnit XML format (for CI test reporters)
     Junit,
+    /// HTML timeline visualization
+    Html,
 }
 
 #[derive(Args, Debug)]
@@ -182,6 +185,13 @@ struct ReportArgs {
     format: String,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum, PartialEq, Eq, Debug)]
+pub enum ExploreStrategyArg {
+    Sequential,
+    Random,
+    Coverage,
+}
+
 #[derive(Args, Debug)]
 struct ExploreArgs {
     /// Kubernetes namespace to test
@@ -207,6 +217,14 @@ struct ExploreArgs {
     /// Maximum parallel runs
     #[arg(long, default_value = "3")]
     parallel: usize,
+
+    /// Exploration strategy
+    #[arg(long, default_value = "sequential", value_enum)]
+    explore_strategy: ExploreStrategyArg,
+
+    /// Bisect failing seed
+    #[arg(long)]
+    bisect: bool,
 
     /// Fault types to inject
     #[arg(
@@ -683,6 +701,30 @@ async fn handle_run(
     } else if args.output == OutputFormat::Junit {
         let junit = report::render_junit_report(&final_events, &verdicts);
         println!("{}", junit);
+    } else if args.output == OutputFormat::Html {
+        let html =
+            report_html::render_html_report(&final_events, &verdicts, seed, duration.as_secs_f64());
+        let html_path = "heisensim-report.html";
+        if let Err(e) = std::fs::write(html_path, &html) {
+            warn!("Failed to write HTML report: {}", e);
+        } else {
+            info!("HTML report saved to {}", html_path);
+            println!(
+                "{}",
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(html_path)
+                    .display()
+            );
+
+            #[cfg(target_os = "macos")]
+            let _ = std::process::Command::new("open").arg(html_path).spawn();
+
+            #[cfg(target_os = "linux")]
+            let _ = std::process::Command::new("xdg-open")
+                .arg(html_path)
+                .spawn();
+        }
     }
 
     // Cleanup K3d if we created it
@@ -943,6 +985,7 @@ struct SimulationResult {
     findings: Vec<String>,
     /// Property verdicts (empty if no properties configured)
     verdicts: Vec<heisensim_props::PropertyVerdict>,
+    events: Vec<heisensim_timeline::event::TimelineEvent>,
 }
 
 /// Core simulation loop extracted for reuse by both `run` and `explore`.
@@ -1093,13 +1136,14 @@ async fn run_single_simulation(
         duration_secs: duration.as_secs_f64(),
         findings,
         verdicts,
+        events,
     })
 }
 
 async fn handle_explore(args: ExploreArgs) -> Result<i32> {
+    anyhow::ensure!(args.parallel > 0, "--parallel must be at least 1");
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
-    let seeds: Vec<u64> = (args.start_seed..args.start_seed + args.seeds).collect();
 
     if args.output == OutputFormat::Text {
         println!("╔══════════════════════════════════════════════════════════════╗");
@@ -1140,10 +1184,32 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         info!("Loaded {} properties from config.", property_defs.len());
     }
 
-    // Run seeds in batches of `parallel`
-    for batch in seeds.chunks(args.parallel) {
+    let strategy = match args.explore_strategy {
+        ExploreStrategyArg::Random => heisensim_fault::explorer::ExploreStrategy::Random,
+        ExploreStrategyArg::Coverage => heisensim_fault::explorer::ExploreStrategy::Coverage,
+        ExploreStrategyArg::Sequential => heisensim_fault::explorer::ExploreStrategy::Sequential,
+    };
+
+    if args.bisect && strategy == heisensim_fault::explorer::ExploreStrategy::Random {
+        warn!(
+            "--bisect with random strategy may not find minimal seeds (seed ordering is non-monotonic)"
+        );
+    }
+    let mut explorer = heisensim_fault::explorer::StrategicExplorer::new(strategy, args.start_seed);
+
+    let mut last_known_good: Option<u64> = None;
+    let mut remaining = args.seeds;
+
+    while remaining > 0 {
+        let batch_size = std::cmp::min(remaining, args.parallel as u64) as usize;
+        let mut batch = Vec::with_capacity(batch_size);
+        for _ in 0..batch_size {
+            batch.push(explorer.next_seed());
+        }
+        remaining -= batch_size as u64;
+
         let mut handles = Vec::new();
-        for &seed in batch {
+        for &seed in &batch {
             let client = client.clone();
             let ns = args.namespace.clone();
             let faults = args.faults.clone();
@@ -1168,6 +1234,76 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                     let props_failed = result.verdicts.iter().any(|v| !v.passed);
                     if has_findings || props_failed {
                         interesting_seeds.push(seed);
+
+                        if args.bisect {
+                            let good_seed = last_known_good.unwrap_or(0);
+                            println!(
+                                "  🔍 Bisection enabled. Bisecting between {} and {}...",
+                                good_seed, seed
+                            );
+                            let mut low = good_seed;
+                            let mut high = seed;
+                            let mut nearest_failing = seed;
+
+                            while low <= high {
+                                let mid = low + (high - low) / 2;
+                                println!("    Checking candidate seed {}...", mid);
+                                let b_result = run_single_simulation(
+                                    &client,
+                                    &args.namespace,
+                                    mid,
+                                    duration,
+                                    warmup,
+                                    &args.faults,
+                                    args.inject_method,
+                                    &property_defs,
+                                )
+                                .await;
+                                match b_result {
+                                    Ok(res) => {
+                                        let b_fail = !res.findings.is_empty()
+                                            || res.verdicts.iter().any(|v| !v.passed);
+                                        if b_fail {
+                                            nearest_failing = mid;
+                                            if mid == 0 {
+                                                break;
+                                            }
+                                            high = mid - 1;
+                                        } else {
+                                            low = mid + 1;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Bisection error at seed {}: {}", mid, e);
+                                        break;
+                                    }
+                                }
+                            }
+                            println!(
+                                "  Nearest failing seed: {} (bisected from {})",
+                                nearest_failing, seed
+                            );
+                            if nearest_failing != seed {
+                                interesting_seeds.push(nearest_failing);
+                            }
+                        }
+                    } else {
+                        last_known_good = Some(seed);
+                    }
+
+                    if strategy == heisensim_fault::explorer::ExploreStrategy::Coverage {
+                        let mut combos = std::collections::HashSet::new();
+                        for ev in &result.events {
+                            if let heisensim_timeline::EventKind::FaultInjected {
+                                fault_kind,
+                                target,
+                                ..
+                            } = &ev.kind
+                            {
+                                combos.insert((fault_kind.clone(), target.clone()));
+                            }
+                        }
+                        explorer.record_coverage(combos);
                     }
 
                     let icon = if props_failed {
@@ -1211,6 +1347,10 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         interesting_seeds.len()
     );
     println!("╚══════════════════════════════════════════════════════════════╝");
+
+    if args.explore_strategy == ExploreStrategyArg::Coverage {
+        println!("\n{}", explorer.coverage_summary());
+    }
 
     if !interesting_seeds.is_empty() {
         println!();
