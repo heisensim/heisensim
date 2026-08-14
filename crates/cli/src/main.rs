@@ -185,6 +185,13 @@ struct ReportArgs {
     format: String,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum, PartialEq, Eq, Debug)]
+pub enum ExploreStrategyArg {
+    Sequential,
+    Random,
+    Coverage,
+}
+
 #[derive(Args, Debug)]
 struct ExploreArgs {
     /// Kubernetes namespace to test
@@ -212,8 +219,8 @@ struct ExploreArgs {
     parallel: usize,
 
     /// Exploration strategy
-    #[arg(long, default_value = "sequential")]
-    explore_strategy: String,
+    #[arg(long, default_value = "sequential", value_enum)]
+    explore_strategy: ExploreStrategyArg,
 
     /// Bisect failing seed
     #[arg(long)]
@@ -1134,6 +1141,7 @@ async fn run_single_simulation(
 }
 
 async fn handle_explore(args: ExploreArgs) -> Result<i32> {
+    anyhow::ensure!(args.parallel > 0, "--parallel must be at least 1");
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
@@ -1176,11 +1184,17 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         info!("Loaded {} properties from config.", property_defs.len());
     }
 
-    let strategy = match args.explore_strategy.as_str() {
-        "random" => heisensim_fault::explorer::ExploreStrategy::Random,
-        "coverage" => heisensim_fault::explorer::ExploreStrategy::Coverage,
-        _ => heisensim_fault::explorer::ExploreStrategy::Sequential,
+    let strategy = match args.explore_strategy {
+        ExploreStrategyArg::Random => heisensim_fault::explorer::ExploreStrategy::Random,
+        ExploreStrategyArg::Coverage => heisensim_fault::explorer::ExploreStrategy::Coverage,
+        ExploreStrategyArg::Sequential => heisensim_fault::explorer::ExploreStrategy::Sequential,
     };
+
+    if args.bisect && strategy == heisensim_fault::explorer::ExploreStrategy::Random {
+        warn!(
+            "--bisect with random strategy may not find minimal seeds (seed ordering is non-monotonic)"
+        );
+    }
     let mut explorer = heisensim_fault::explorer::StrategicExplorer::new(strategy, args.start_seed);
 
     let mut last_known_good: Option<u64> = None;
@@ -1269,7 +1283,9 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                                 "  Minimal failing seed: {} (bisected from {})",
                                 min_failing, seed
                             );
-                            interesting_seeds.push(min_failing);
+                            if min_failing != seed {
+                                interesting_seeds.push(min_failing);
+                            }
                         }
                     } else {
                         last_known_good = Some(seed);
@@ -1332,7 +1348,7 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     );
     println!("╚══════════════════════════════════════════════════════════════╝");
 
-    if args.explore_strategy == "coverage" {
+    if args.explore_strategy == ExploreStrategyArg::Coverage {
         println!("\n{}", explorer.coverage_summary());
     }
 

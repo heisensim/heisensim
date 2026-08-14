@@ -76,7 +76,7 @@ impl StrategicExplorer {
 
     pub fn coverage_summary(&self) -> String {
         format!(
-            "Coverage: {}/15 (fault×pod) combinations tested",
+            "Coverage: {} unique (fault×pod) combinations tested",
             self.seen_combinations.len()
         )
     }
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(seed, 12 + offset);
         assert_eq!(
             explorer.coverage_summary(),
-            "Coverage: 1/15 (fault×pod) combinations tested"
+            "Coverage: 1 unique (fault×pod) combinations tested"
         );
     }
 

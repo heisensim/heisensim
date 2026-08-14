@@ -2,6 +2,14 @@ use heisensim_props::PropertyVerdict;
 use heisensim_timeline::event::{EventKind, TimelineEvent};
 use std::collections::{HashMap, HashSet};
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 pub fn render_html_report(
     events: &[TimelineEvent],
     verdicts: &[PropertyVerdict],
@@ -160,8 +168,14 @@ pub fn render_html_report(
     };
 
     for pod in &pods {
-        html.push_str(&format!("<div class=\"lane\" data-pod=\"{}\">\n", pod));
-        html.push_str(&format!("<div class=\"lane-label\">{}</div>\n", pod));
+        html.push_str(&format!(
+            "<div class=\"lane\" data-pod=\"{}\">\n",
+            html_escape(pod)
+        ));
+        html.push_str(&format!(
+            "<div class=\"lane-label\">{}</div>\n",
+            html_escape(pod)
+        ));
 
         // Draw faults for this pod
         for event in events {
@@ -177,7 +191,10 @@ pub fn render_html_report(
                             "<div class=\"fault-injected\" style=\"left: {}%; width: {}%;\">\n",
                             start_pct, width
                         ));
-                        html.push_str(&format!("<span class=\"fault-label\">{}</span>\n", kind));
+                        html.push_str(&format!(
+                            "<span class=\"fault-label\">{}</span>\n",
+                            html_escape(kind)
+                        ));
                         html.push_str("</div>\n");
                     }
                 }
@@ -230,16 +247,16 @@ pub fn render_html_report(
         };
         html.push_str("<tr>\n");
         html.push_str(&format!("<td class=\"{}\">{}</td>\n", class, status));
-        html.push_str(&format!("<td>{}</td>\n", v.property_name));
-        html.push_str(&format!("<td>{}</td>\n", v.expected));
-        html.push_str(&format!("<td>{}</td>\n", v.actual));
+        html.push_str(&format!("<td>{}</td>\n", html_escape(&v.property_name)));
+        html.push_str(&format!("<td>{}</td>\n", html_escape(&v.expected)));
+        html.push_str(&format!("<td>{}</td>\n", html_escape(&v.actual)));
         html.push_str("</tr>\n");
 
         if !v.details.is_empty() {
             html.push_str("<tr><td colspan=\"4\">\n");
             html.push_str("<details><summary>Details</summary><ul>\n");
             for detail in &v.details {
-                html.push_str(&format!("<li>{}</li>\n", detail));
+                html.push_str(&format!("<li>{}</li>\n", html_escape(detail)));
             }
             html.push_str("</ul></details>\n");
             html.push_str("</td></tr>\n");

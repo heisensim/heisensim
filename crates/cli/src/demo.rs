@@ -241,7 +241,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             output: super::OutputFormat::Text,
             otel_endpoint: None,
             bisect: false,
-            explore_strategy: "random".to_string(),
+            explore_strategy: super::ExploreStrategyArg::Random,
         };
 
         let explore_exit = super::handle_explore(explore_args).await?;
