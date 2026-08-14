@@ -99,6 +99,12 @@ impl Timeline {
         events.clone()
     }
 
+    /// Push an exact pre-constructed event into the timeline.
+    pub fn push_event(&self, event: TimelineEvent) {
+        let mut events = self.events.write().expect("Timeline lock poisoned");
+        events.push(event);
+    }
+
     /// The number of events in the timeline.
     pub fn len(&self) -> usize {
         let events = self.events.read().expect("Timeline lock poisoned");
@@ -135,6 +141,11 @@ impl TimelineHandle {
     /// Emit a new event into the shared timeline.
     pub fn emit(&self, kind: EventKind) {
         self.timeline.emit(kind)
+    }
+
+    /// Push an exact pre-constructed event into the shared timeline.
+    pub fn push_event(&self, event: TimelineEvent) {
+        self.timeline.push_event(event)
     }
 
     /// Retrieve a clone of all events currently in the timeline.

@@ -15,6 +15,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod demo;
 mod metrics;
+mod mock;
 mod properties;
 mod rbac;
 mod report;
@@ -125,6 +126,10 @@ struct RunArgs {
     /// When set, heisensim exports fault injection and probe spans via OpenTelemetry.
     #[arg(long)]
     otel_endpoint: Option<String>,
+
+    /// Run in mock mode (no Kubernetes cluster required)
+    #[arg(long)]
+    mock: bool,
 }
 
 /// Method for injecting network faults into pods.
@@ -249,6 +254,10 @@ struct ExploreArgs {
     /// OTLP endpoint for exporting traces (e.g. http://localhost:4318).
     #[arg(long)]
     otel_endpoint: Option<String>,
+
+    /// Run in mock mode (no Kubernetes cluster required)
+    #[arg(long)]
+    mock: bool,
 }
 
 #[derive(Args, Debug)]
@@ -424,6 +433,11 @@ async fn handle_run(
     meter_provider: Option<&opentelemetry_sdk::metrics::SdkMeterProvider>,
 ) -> Result<i32> {
     let seed = args.seed.unwrap_or_else(|| rand::rng().random());
+
+    if args.mock {
+        return mock::handle_mock_run(&args, meter_provider).await;
+    }
+
     println!("Config Summary:");
     println!("  Namespace: {}", args.namespace);
     println!("  Duration: {}", args.duration);
@@ -976,7 +990,7 @@ async fn handle_rbac(args: RbacArgs) -> Result<()> {
 
 /// Result of a single simulation run, used by explore mode.
 #[allow(dead_code)]
-struct SimulationResult {
+pub(crate) struct SimulationResult {
     seed: u64,
     total_faults: usize,
     total_failures: usize,
@@ -1142,6 +1156,11 @@ async fn run_single_simulation(
 
 async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     anyhow::ensure!(args.parallel > 0, "--parallel must be at least 1");
+
+    if args.mock {
+        return mock::handle_mock_explore(&args).await;
+    }
+
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 

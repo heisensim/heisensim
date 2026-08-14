@@ -216,6 +216,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             inject_method: super::InjectMethod::Debug,
             output: super::OutputFormat::Text,
             otel_endpoint: None,
+            mock: false,
         };
         super::handle_run(args, None).await?
     } else {
@@ -242,6 +243,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             otel_endpoint: None,
             bisect: false,
             explore_strategy: super::ExploreStrategyArg::Random,
+            mock: false,
         };
 
         let explore_exit = super::handle_explore(explore_args).await?;
@@ -273,6 +275,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
                 inject_method: super::InjectMethod::Debug,
                 output: super::OutputFormat::Text,
                 otel_endpoint: None,
+                mock: false,
             };
 
             let replay_exit = super::handle_run(replay_args, None).await?;
