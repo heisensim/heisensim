@@ -1,0 +1,13 @@
+title: "[Show] "
+labels: ["show-and-tell"]
+body:
+  - type: markdown
+    attributes:
+      value: "Share how you're using heisensim!"
+  - type: textarea
+    id: description
+    attributes:
+      label: What did you build?
+      description: Tell us about your setup
+    validations:
+      required: true
