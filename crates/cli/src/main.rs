@@ -1243,7 +1243,7 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                             );
                             let mut low = good_seed;
                             let mut high = seed;
-                            let mut min_failing = seed;
+                            let mut nearest_failing = seed;
 
                             while low <= high {
                                 let mid = low + (high - low) / 2;
@@ -1264,7 +1264,7 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                                         let b_fail = !res.findings.is_empty()
                                             || res.verdicts.iter().any(|v| !v.passed);
                                         if b_fail {
-                                            min_failing = mid;
+                                            nearest_failing = mid;
                                             if mid == 0 {
                                                 break;
                                             }
@@ -1280,11 +1280,11 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                                 }
                             }
                             println!(
-                                "  Minimal failing seed: {} (bisected from {})",
-                                min_failing, seed
+                                "  Nearest failing seed: {} (bisected from {})",
+                                nearest_failing, seed
                             );
-                            if min_failing != seed {
-                                interesting_seeds.push(min_failing);
+                            if nearest_failing != seed {
+                                interesting_seeds.push(nearest_failing);
                             }
                         }
                     } else {
