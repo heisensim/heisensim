@@ -10,6 +10,10 @@
 
 **heisensim** is a chaos testing CLI for Kubernetes that injects faults, monitors health probes, and **verifies your SLA properties automatically**. Exit code 1 when properties fail — CI-native.
 
+<p align="center">
+  <img src="demo.gif" alt="heisensim terminal demo showing version output, mock fault injection with network-delay and network-loss, and coverage-guided seed exploration" width="720">
+</p>
+
 ```
 ╔═══════════════════════════════════════════════════════════════╗
 ║  PROPERTY RESULTS                                  4/5 PASS  ║
