@@ -835,10 +835,6 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
 }
 
 async fn handle_init(output: &str) -> Result<()> {
-    if std::path::Path::new(output).exists() {
-        anyhow::bail!("Output file '{}' already exists", output);
-    }
-
     let config = r#"# heisensim configuration
 # Docs: https://heisensim.dev
 
@@ -866,7 +862,7 @@ interval = "1s"
 
 [[properties]]
 name = "fast-recovery"
-type = "recovery"
+type = "recovery_time"
 max_seconds = 30
 
 [[properties]]
@@ -892,7 +888,24 @@ max_ms = 500
 # baseline_seconds = 30
 "#;
 
-    std::fs::write(output, config).context("Failed to write config file")?;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow::anyhow!(
+                    "Output file '{}' already exists. Use a different path or remove it first.",
+                    output
+                )
+            } else {
+                anyhow::anyhow!("Failed to create '{}': {}", output, e)
+            }
+        })?;
+    file.write_all(config.as_bytes())?;
 
     println!("Created {} — edit it for your setup, then run:", output);
     println!("  heisensim validate --config {}", output);
@@ -908,15 +921,18 @@ async fn handle_validate(args: ValidateArgs) -> Result<()> {
     let val: toml::Value = toml::from_str(&config_str)
         .context(format!("Failed to parse config file: {}", args.config))?;
 
-    let duration = val
-        .get("duration")
-        .and_then(|v| v.as_str())
-        .unwrap_or("30s");
-    let warmup = val.get("warmup").and_then(|v| v.as_str()).unwrap_or("5s");
-    let namespace = val
-        .get("namespace")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
+    let duration = match val.get("duration") {
+        Some(v) => v.as_str().context("'duration' must be a string")?,
+        None => "30s",
+    };
+    let warmup = match val.get("warmup") {
+        Some(v) => v.as_str().context("'warmup' must be a string")?,
+        None => "5s",
+    };
+    let namespace = match val.get("namespace") {
+        Some(v) => v.as_str().context("'namespace' must be a string")?,
+        None => "default",
+    };
 
     parse_duration(duration).context("Invalid duration")?;
     parse_duration(warmup).context("Invalid warmup")?;
@@ -926,25 +942,33 @@ async fn handle_validate(args: ValidateArgs) -> Result<()> {
     }
 
     let mut faults = Vec::new();
-    if let Some(f) = val.get("faults").and_then(|v| v.as_array()) {
+    if let Some(f_val) = val.get("faults") {
+        let f = f_val.as_array().context("'faults' must be an array")?;
         for v in f {
             if let Some(s) = v.as_str() {
                 faults.push(s.to_string());
+            } else {
+                anyhow::bail!("Faults array must contain only strings");
             }
         }
     }
 
     let mut probes_count = 0;
     let mut probe_names = Vec::new();
-    if let Some(p_arr) = val.get("probes").and_then(|v| v.as_array()) {
+    if let Some(probes_val) = val.get("probes") {
+        let p_arr = probes_val.as_array().context("'probes' must be an array")?;
         for p in p_arr {
-            let name = p
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unnamed")
-                .to_string();
-            if let Some(url) = p.get("url").and_then(|v| v.as_str()) {
-                if !url.starts_with("http://") && !url.starts_with("https://") {
+            let name = match p.get("name") {
+                Some(v) => v
+                    .as_str()
+                    .context("probe 'name' must be a string")?
+                    .to_string(),
+                None => "unnamed".to_string(),
+            };
+            if let Some(url_val) = p.get("url") {
+                let url = url_val.as_str().context("probe 'url' must be a string")?;
+                let valid_scheme = url.starts_with("http://") || url.starts_with("https://");
+                if !valid_scheme {
                     anyhow::bail!("Invalid URL in probe '{}': {}", name, url);
                 }
             }
