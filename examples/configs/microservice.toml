@@ -23,7 +23,7 @@ min_percent = 99.5
 
 [[properties]]
 name = "fast-recovery"
-type = "recovery"
+type = "recovery_time"
 max_seconds = 30
 
 [[properties]]
@@ -33,8 +33,9 @@ max_ms = 500
 
 [[properties]]
 name = "no-cascades"
-type = "cascade"
-max_affected = 2
+type = "no_cascade"
+window_seconds = 30
+allowed_failing_probes = ["user-service"]
 
 [[properties]]
 name = "dns-recovers"

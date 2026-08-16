@@ -18,7 +18,7 @@ min_percent = 95.0
 
 [[properties]]
 name = "reconnects-fast"
-type = "recovery"
+type = "recovery_time"
 max_seconds = 45
 
 [[properties]]

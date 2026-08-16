@@ -20,6 +20,8 @@ nix develop
 
 # Without Nix:
 cargo build
+brew install lefthook  # for pre-commit hooks
+lefthook install
 ```
 
 ### Running Tests
@@ -30,7 +32,7 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Pre-commit hooks run automatically via [Lefthook](https://github.com/evilmartians/lefthook).
+Pre-commit hooks run automatically via [Lefthook](https://github.com/evilmartians/lefthook) (configured automatically inside `nix develop` or after running `lefthook install`).
 
 ## Development Workflow
 

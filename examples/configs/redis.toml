@@ -18,10 +18,10 @@ min_percent = 99.0
 
 [[properties]]
 name = "fast-failover"
-type = "recovery"
+type = "recovery_time"
 max_seconds = 15
 
 [[properties]]
 name = "no-error-storm"
-type = "error-budget"
-max_errors = 10
+type = "error_budget"
+max_consecutive = 10
