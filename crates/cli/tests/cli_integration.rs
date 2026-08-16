@@ -37,7 +37,15 @@ fn test_init_help() {
     let output = heisensim().args(["init", "--help"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--dry-run"));
+    assert!(stdout.contains("--output"));
+}
+
+#[test]
+fn test_validate_help() {
+    let output = heisensim().args(["validate", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--config"));
 }
 
 #[test]
