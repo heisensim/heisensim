@@ -5,61 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2026-08-10
+## [0.7.0] - 2026-08-14
 
 ### Added
+- Mock mode (`--mock`) for cluster-free simulation
+- Discussion templates (Ideas, Q&A, Show & Tell)
+- Public roadmap issues (#25-#30)
 
-- **Property Checking** — 5 timeline-aware invariant properties:
-  - `recovery_time` — probes recover within N seconds after each fault
-  - `availability` — probe success rate ≥ N%
-  - `error_budget` — max consecutive failures per probe
-  - `no_cascade` — faults don't cascade to unexpected probes
-  - `latency_p99` — probe latency percentile ≤ threshold
-- `[[properties]]` TOML config section for defining SLA properties
-- Pretty verdict table printed after simulation
-- Exit code 1 when any property fails (CI-friendly)
-- Pre-built release binaries for Linux (x86_64, aarch64) and macOS (x86_64, Apple Silicon)
-- Homebrew formula: `brew install heisensim/tap/heisensim`
-- Nix flake: `nix run github:heisensim/heisensim`
-- GitHub Actions release workflow (triggered on tag push)
-- CHANGELOG.md
-- Updated README with install instructions, property checking docs
-
-### Changed
-
-- Architecture section in README updated to reflect `heisensim-props` as active
-- Roadmap updated: Phase 2 marked complete
-
-## [0.1.1] - 2026-08-10
+## [0.6.0] - 2026-08-13
 
 ### Added
+- Explore strategies: `--explore-strategy sequential|random|coverage`
+- Seed bisection: `--bisect` finds nearest failing seed
+- HTML timeline report: `--output html` with dark-theme visualization
+- ValueEnum for strategy argument (invalid values now error)
+- HTML escaping for dynamic report values
+- Parallel validation (`--parallel 0` now errors)
 
-- Published to crates.io
-- `heisensim explore` subcommand — run many seeds in parallel
-- `heisensim init` subcommand — auto-generate config from K8s cluster
-- `heisensim replay` subcommand — re-run with identical fault sequence
-- Ephemeral container injection (`--inject-method debug`)
-- gRPC health check probe support
-- Exec probe support
-- Automated publish workflow with token expiry validation
-- README with badges, architecture, comparison matrix
+## [0.5.0] - 2026-08-13
+
+### Added
+- Stress fault type (CPU/memory via stress-ng ephemeral containers)
+- DNS fault type (iptables port 53 blocking)
+- GitHub Actions composite action for CI integration
+- Three new property types: throughput, steady-state, dns-resolution
+- Input validation for property constructors
+- Fault ID tracking in steady-state evaluation
 
 ### Fixed
+- Flaky traceparent integration test (OTel global propagator race)
+- Atomic DNS iptables cleanup
 
-- Workspace `Cargo.toml` version fields for crates.io publishing
-
-## [0.1.0] - 2026-08-10
+## [0.4.0] - 2026-08-09
 
 ### Added
+- Initial public release
+- Core fault types: network-delay, network-loss, network-partition
+- Property system: availability, latency, recovery, error-budget, cascade, no-crash, no-hang
+- Explore mode with parallel seed testing
+- JSON and JUnit output formats
+- OTel tracing integration
+- Deterministic seed-based fault scheduling
+- k8s-demo example with k3d
+- Homebrew tap installation
+- GitHub Actions CI/CD
 
-- Initial release
-- K8s fault injection (pod crashes, network latency)
-- Pod and probe auto-discovery
-- HTTP and TCP health probe monitoring
-- Microsecond event timeline with fault↔failure correlation
-- Deterministic seed-based replay
-- 8-crate workspace: cli, core, timeline, probe, k8s, fault, props, intercept
-
-[0.2.0]: https://github.com/heisensim/heisensim/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/heisensim/heisensim/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/heisensim/heisensim/releases/tag/v0.1.0
+[0.7.0]: https://github.com/heisensim/heisensim/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/heisensim/heisensim/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/heisensim/heisensim/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/heisensim/heisensim/releases/tag/v0.4.0
