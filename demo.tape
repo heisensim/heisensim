@@ -11,7 +11,9 @@ Set Theme "Catppuccin Mocha"
 Set Padding 20
 Set TypingSpeed 30ms
 
-# Title pause
+# Work from a disposable temp dir to avoid stray files
+Type "cd $(mktemp -d) && clear"
+Enter
 Sleep 500ms
 
 # Step 1: Show version
