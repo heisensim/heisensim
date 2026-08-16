@@ -1,0 +1,27 @@
+# heisensim config: Redis resilience testing
+# Tests that your app handles Redis failures gracefully
+
+duration = "2m"
+warmup = "10s"
+namespace = "default"
+faults = ["network-delay", "network-partition"]
+
+[[probes]]
+name = "app-health"
+url = "http://my-app.default.svc:8080/health"
+interval = "1s"
+
+[[properties]]
+name = "app-stays-up"
+type = "availability"
+min_percent = 99.0
+
+[[properties]]
+name = "fast-failover"
+type = "recovery"
+max_seconds = 15
+
+[[properties]]
+name = "no-error-storm"
+type = "error-budget"
+max_errors = 10

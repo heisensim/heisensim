@@ -1,0 +1,34 @@
+# heisensim config: Database failover testing
+# Tests application behavior when the database is unreachable
+
+duration = "2m"
+warmup = "10s"
+namespace = "default"
+faults = ["network-partition", "stress"]
+
+[[probes]]
+name = "app-api"
+url = "http://my-app.default.svc:8080/api/health"
+interval = "1s"
+
+[[properties]]
+name = "graceful-degradation"
+type = "availability"
+min_percent = 95.0
+
+[[properties]]
+name = "reconnects-fast"
+type = "recovery"
+max_seconds = 45
+
+[[properties]]
+name = "steady-under-stress"
+type = "steady-state"
+max_recovery_seconds = 60
+baseline_seconds = 20
+
+[[properties]]
+name = "throughput-maintained"
+type = "throughput"
+window_seconds = 60
+min_per_minute = 5

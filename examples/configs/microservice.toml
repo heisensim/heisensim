@@ -1,0 +1,42 @@
+# heisensim config: Microservice mesh resilience
+# Tests service-to-service communication under chaos
+
+duration = "3m"
+warmup = "15s"
+namespace = "production"
+faults = ["network-delay", "network-loss", "dns"]
+
+[[probes]]
+name = "api-gateway"
+url = "http://api-gateway.production.svc:8080/healthz"
+interval = "1s"
+
+[[probes]]
+name = "user-service"
+url = "http://user-service.production.svc:8080/health"
+interval = "2s"
+
+[[properties]]
+name = "gateway-available"
+type = "availability"
+min_percent = 99.5
+
+[[properties]]
+name = "fast-recovery"
+type = "recovery"
+max_seconds = 30
+
+[[properties]]
+name = "low-latency"
+type = "latency_p99"
+max_ms = 500
+
+[[properties]]
+name = "no-cascades"
+type = "cascade"
+max_affected = 2
+
+[[properties]]
+name = "dns-recovers"
+type = "dns-resolution"
+max_recovery_seconds = 10
