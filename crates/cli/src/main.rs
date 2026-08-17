@@ -112,6 +112,7 @@ struct RunArgs {
     #[arg(long)]
     k3d: bool,
 
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -269,7 +270,7 @@ struct ExploreArgs {
     #[arg(long)]
     bisect: bool,
 
-    /// Fault types to inject
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
