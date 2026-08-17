@@ -47,7 +47,12 @@ impl FaultOperator {
     }
 
     /// Inject a pod crash by deleting the pod.
-    pub async fn inject_pod_crash(&self, namespace: &str, pod_name: &str) -> Result<Uuid> {
+    pub async fn inject_pod_crash(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        grace_period_secs: Option<i64>,
+    ) -> Result<Uuid> {
         let api: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -63,7 +68,16 @@ impl FaultOperator {
 
         info!(pod = pod_name, "Injecting pod crash: deleting pod");
         drop(_guard); // Must drop before .await (EnteredSpan is !Send)
-        api.delete(pod_name, &DeleteParams::default())
+        let dp = if let Some(gp) = grace_period_secs {
+            let gp_u32 = if gp < 0 { 0 } else { gp as u32 };
+            DeleteParams {
+                grace_period_seconds: Some(gp_u32),
+                ..Default::default()
+            }
+        } else {
+            DeleteParams::default()
+        };
+        api.delete(pod_name, &dp)
             .await
             .context("Failed to delete pod")?;
 
@@ -74,6 +88,29 @@ impl FaultOperator {
             duration_secs: None,
         });
 
+        Ok(fault_id)
+    }
+
+    /// Inject an eviction fault (tests PDBs).
+    pub async fn inject_eviction(&self, namespace: &str, pod_name: &str) -> Result<Uuid> {
+        let fault_id = Uuid::new_v4();
+
+        self.timeline.emit(EventKind::FaultInjected {
+            fault_id,
+            fault_kind: "eviction".to_string(),
+            target: pod_name.to_string(),
+            duration_secs: None,
+        });
+
+        use kube::api::EvictParams;
+
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
+
+        pods.evict(pod_name, &EvictParams::default())
+            .await
+            .context(format!("Failed to evict pod {}", pod_name))?;
+
+        info!("Evicted pod {}/{}", namespace, pod_name);
         Ok(fault_id)
     }
 

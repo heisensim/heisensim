@@ -137,6 +137,42 @@ struct RunArgs {
     /// Run in mock mode (no Kubernetes cluster required)
     #[arg(long)]
     mock: bool,
+    /// Grace period in seconds for crash faults (default: K8s default 30s).
+    /// Use 0 for immediate kill (no SIGTERM).
+    #[arg(long)]
+    crash_grace_period: Option<i64>,
+
+    /// Fault profile preset. Overrides --faults when set.
+    #[arg(long, value_enum)]
+    profile: Option<FaultProfile>,
+}
+
+/// Fault profile presets.
+#[derive(Clone, Debug, ValueEnum)]
+pub enum FaultProfile {
+    /// Network and pod faults (crash, latency, partition, stress, dns)
+    Standard,
+    /// Standard + eviction (tests PodDisruptionBudgets)
+    Aggressive,
+}
+
+fn resolve_faults(faults: &[String], profile: Option<&FaultProfile>) -> Vec<String> {
+    if let Some(p) = profile {
+        match p {
+            FaultProfile::Standard => vec!["crash", "latency", "partition", "stress", "dns"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            FaultProfile::Aggressive => {
+                vec!["crash", "latency", "partition", "stress", "dns", "eviction"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+        }
+    } else {
+        faults.to_vec()
+    }
 }
 
 /// Method for injecting network faults into pods.
@@ -260,6 +296,14 @@ struct ExploreArgs {
     /// Run in mock mode (no Kubernetes cluster required)
     #[arg(long)]
     mock: bool,
+    /// Grace period in seconds for crash faults (default: K8s default 30s).
+    /// Use 0 for immediate kill (no SIGTERM).
+    #[arg(long)]
+    crash_grace_period: Option<i64>,
+
+    /// Fault profile preset. Overrides --faults when set.
+    #[arg(long, value_enum)]
+    profile: Option<FaultProfile>,
 }
 
 #[derive(Args, Debug)]
@@ -450,7 +494,8 @@ async fn handle_run(
     println!("  Seed: 0x{:04X}", seed);
     println!("  Warmup: {}", args.warmup);
     println!("  K3d: {}", args.k3d);
-    println!("  Faults: {:?}", args.faults);
+    let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
+    println!("  Faults: {:?}", resolved_faults);
 
     // Parse durations
     let duration = parse_duration(&args.duration)?;
@@ -567,7 +612,7 @@ async fn handle_run(
         let target = &ready_pods[target_idx];
 
         // Pick fault type from the enabled list
-        let fault_types = &args.faults;
+        let fault_types = &resolved_faults;
         let fault_idx = rng.random_range(0..fault_types.len());
         let fault_type = &fault_types[fault_idx];
 
@@ -575,11 +620,21 @@ async fn handle_run(
             "crash" => {
                 info!("💥 Injecting pod crash on {}", target.name);
                 match fault_op
-                    .inject_pod_crash(&args.namespace, &target.name)
+                    .inject_pod_crash(&args.namespace, &target.name, args.crash_grace_period)
                     .await
                 {
                     Ok(id) => info!("  Fault {}: pod deleted", id),
                     Err(e) => warn!("  Failed to crash pod: {}", e),
+                }
+            }
+            "eviction" => {
+                info!("🏚️  Evicting pod {}", target.name);
+                match fault_op
+                    .inject_eviction(&args.namespace, &target.name)
+                    .await
+                {
+                    Ok(id) => info!("  Fault {}: pod evicted (tests PDB)", id),
+                    Err(e) => warn!("  Failed to evict pod: {}", e),
                 }
             }
             "latency" => {
@@ -817,6 +872,7 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
         warmup,
         &faults,
         InjectMethod::Exec,
+        None, // crash_grace_period
         &[],
     )
     .await?;
@@ -850,6 +906,7 @@ namespace = "default"
 # Fault types to inject
 # Available: network-delay, network-loss, network-partition, stress, dns
 faults = ["network-delay", "network-loss"]
+# Or use --profile standard (default) or --profile aggressive (adds eviction)
 
 # HTTP probes to monitor during chaos testing
 [[probes]]
@@ -1087,7 +1144,7 @@ pub(crate) struct SimulationResult {
     events: Vec<heisensim_timeline::event::TimelineEvent>,
 }
 
-/// Core simulation loop extracted for reuse by both `run` and `explore`.
+#[allow(clippy::too_many_arguments)]
 async fn run_single_simulation(
     client: &kube::Client,
     namespace: &str,
@@ -1096,6 +1153,7 @@ async fn run_single_simulation(
     warmup: std::time::Duration,
     faults: &[String],
     inject_method: InjectMethod,
+    crash_grace_period: Option<i64>,
     property_defs: &[properties::PropertyDef],
 ) -> Result<SimulationResult> {
     let handle = heisensim_timeline::TimelineHandle::new();
@@ -1152,7 +1210,12 @@ async fn run_single_simulation(
 
         match faults[fault_idx].as_str() {
             "crash" => {
-                let _ = fault_op.inject_pod_crash(namespace, &target.name).await;
+                let _ = fault_op
+                    .inject_pod_crash(namespace, &target.name, crash_grace_period)
+                    .await;
+            }
+            "eviction" => {
+                let _ = fault_op.inject_eviction(namespace, &target.name).await;
             }
             "latency" => {
                 let delay: u32 = rng.random_range(200..700);
@@ -1249,6 +1312,8 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
+    let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
+
     if args.output == OutputFormat::Text {
         println!("╔══════════════════════════════════════════════════════════════╗");
         println!(
@@ -1260,7 +1325,7 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         println!(
             "║  Namespace: {:16} │  Faults: {:20} ║",
             args.namespace,
-            args.faults.join(",")
+            resolved_faults.join(",")
         );
         println!("╚══════════════════════════════════════════════════════════════╝");
         println!();
@@ -1316,14 +1381,15 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         for &seed in &batch {
             let client = client.clone();
             let ns = args.namespace.clone();
-            let faults = args.faults.clone();
+            let faults = resolved_faults.clone();
             let method = args.inject_method;
+            let cgp = args.crash_grace_period;
             let prop_defs = property_defs.clone();
 
             handles.push(tokio::spawn(async move {
                 info!(seed = seed, "🔬 Starting seed 0x{:04X}...", seed);
                 let result = run_single_simulation(
-                    &client, &ns, seed, duration, warmup, &faults, method, &prop_defs,
+                    &client, &ns, seed, duration, warmup, &faults, method, cgp, &prop_defs,
                 )
                 .await;
                 info!(seed = seed, "✅ Seed 0x{:04X} complete.", seed);
@@ -1358,8 +1424,9 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                                     mid,
                                     duration,
                                     warmup,
-                                    &args.faults,
+                                    &resolved_faults,
                                     args.inject_method,
+                                    args.crash_grace_period,
                                     &property_defs,
                                 )
                                 .await;
