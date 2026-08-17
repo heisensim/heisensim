@@ -141,10 +141,10 @@ struct RunArgs {
     /// Grace period in seconds for crash faults (default: K8s default 30s).
     /// Use 0 for immediate kill (no SIGTERM).
     #[arg(long)]
-    crash_grace_period: Option<i64>,
+    crash_grace_period: Option<u32>,
 
     /// Fault profile preset. Overrides --faults when set.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
 }
 
@@ -300,10 +300,10 @@ struct ExploreArgs {
     /// Grace period in seconds for crash faults (default: K8s default 30s).
     /// Use 0 for immediate kill (no SIGTERM).
     #[arg(long)]
-    crash_grace_period: Option<i64>,
+    crash_grace_period: Option<u32>,
 
     /// Fault profile preset. Overrides --faults when set.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
 }
 
@@ -1154,7 +1154,7 @@ async fn run_single_simulation(
     warmup: std::time::Duration,
     faults: &[String],
     inject_method: InjectMethod,
-    crash_grace_period: Option<i64>,
+    crash_grace_period: Option<u32>,
     property_defs: &[properties::PropertyDef],
 ) -> Result<SimulationResult> {
     let handle = heisensim_timeline::TimelineHandle::new();

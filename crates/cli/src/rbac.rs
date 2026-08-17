@@ -14,9 +14,6 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
         }
         if fault == "eviction" {
             has_eviction = true;
-            if !pod_verbs.contains(&"delete") {
-                pod_verbs.push("delete");
-            }
         }
         if fault == "latency"
             || fault == "partition"
@@ -49,7 +46,7 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
 
     if has_eviction {
         rules.push_str(
-            "  - apiGroups: [\"policy\"]\n    resources: [\"pods/eviction\"]\n    verbs: [\"create\"]\n",
+            "  - apiGroups: [\"\"]\n    resources: [\"pods/eviction\"]\n    verbs: [\"create\"]\n",
         );
     }
 

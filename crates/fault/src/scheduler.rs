@@ -229,6 +229,7 @@ mod tests {
                 FaultType::Dns,
                 FaultType::Stress { cpu_workers: 1, mem_bytes: 1024 },
                 FaultType::Eviction,
+                FaultType::Latency { delay_ms: 100, jitter_ms: 50 },
             ];
             let pods = vec!["p1".to_string(), "p2".to_string()];
             let mut s = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
@@ -260,6 +261,7 @@ mod tests {
                 FaultType::Dns,
                 FaultType::Stress { cpu_workers: 1, mem_bytes: 1024 },
                 FaultType::Eviction,
+                FaultType::Latency { delay_ms: 100, jitter_ms: 50 },
             ];
             let pods = vec!["p1".to_string(), "p2".to_string()];
             let mut s1 = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());

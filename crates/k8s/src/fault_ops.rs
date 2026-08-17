@@ -51,7 +51,7 @@ impl FaultOperator {
         &self,
         namespace: &str,
         pod_name: &str,
-        grace_period_secs: Option<i64>,
+        grace_period_secs: Option<u32>,
     ) -> Result<Uuid> {
         let api: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
         let fault_id = Uuid::new_v4();
@@ -69,9 +69,8 @@ impl FaultOperator {
         info!(pod = pod_name, "Injecting pod crash: deleting pod");
         drop(_guard); // Must drop before .await (EnteredSpan is !Send)
         let dp = if let Some(gp) = grace_period_secs {
-            let gp_u32 = if gp < 0 { 0 } else { gp as u32 };
             DeleteParams {
-                grace_period_seconds: Some(gp_u32),
+                grace_period_seconds: Some(gp),
                 ..Default::default()
             }
         } else {
@@ -106,11 +105,22 @@ impl FaultOperator {
 
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
 
-        pods.evict(pod_name, &EvictParams::default())
-            .await
-            .context(format!("Failed to evict pod {}", pod_name))?;
-
-        info!("Evicted pod {}/{}", namespace, pod_name);
+        match pods.evict(pod_name, &EvictParams::default()).await {
+            Ok(_) => {
+                info!("Evicted pod {}/{}", namespace, pod_name);
+            }
+            Err(kube::Error::Api(err_resp)) if err_resp.code == 429 || err_resp.code == 500 => {
+                // PDB is blocking the eviction — this is expected behavior
+                info!(
+                    "Eviction of {}/{} blocked by PodDisruptionBudget (HTTP {}): {}",
+                    namespace, pod_name, err_resp.code, err_resp.message
+                );
+                self.timeline.emit(EventKind::FaultReverted { fault_id });
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to evict pod {}: {}", pod_name, e));
+            }
+        }
         Ok(fault_id)
     }
 
