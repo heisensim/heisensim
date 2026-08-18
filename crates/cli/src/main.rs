@@ -654,7 +654,8 @@ async fn handle_run(
                     .inject_eviction(&args.namespace, &target.name)
                     .await
                 {
-                    Ok(id) => info!("  Fault {}: pod evicted (tests PDB)", id),
+                    Ok((id, true)) => info!("  Fault {}: pod evicted (tests PDB)", id),
+                    Ok((id, false)) => info!("  Fault {}: eviction blocked by PDB ✓", id),
                     Err(e) => warn!("  Failed to evict pod: {}", e),
                 }
             }
@@ -879,7 +880,7 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
     let warmup = std::time::Duration::from_secs(10);
     let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
 
-    let _result = run_single_simulation(
+    let result = run_single_simulation(
         &client,
         &args.namespace,
         args.seed,
@@ -892,12 +893,9 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
     )
     .await?;
 
-    // run_single_simulation does not currently return events, using empty vector
-    let events: Vec<heisensim_timeline::event::TimelineEvent> = Vec::new();
+    report::render_terminal_report(&result.events);
 
-    report::render_terminal_report(&events);
-
-    let json = report::render_json_report(&events);
+    let json = report::render_json_report(&result.events);
     let json_path = format!("heisensim-report-{:04x}.json", args.seed & 0xFFFF);
     std::fs::write(&json_path, &json)?;
     info!("Timeline saved to {}", json_path);

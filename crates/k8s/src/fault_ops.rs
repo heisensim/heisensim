@@ -91,7 +91,8 @@ impl FaultOperator {
     }
 
     /// Inject an eviction fault (tests PDBs).
-    pub async fn inject_eviction(&self, namespace: &str, pod_name: &str) -> Result<Uuid> {
+    /// Returns `(fault_id, evicted)` where `evicted` is false if PDB blocked it.
+    pub async fn inject_eviction(&self, namespace: &str, pod_name: &str) -> Result<(Uuid, bool)> {
         let fault_id = Uuid::new_v4();
 
         self.timeline.emit(EventKind::FaultInjected {
@@ -108,6 +109,7 @@ impl FaultOperator {
         match pods.evict(pod_name, &EvictParams::default()).await {
             Ok(_) => {
                 info!("Evicted pod {}/{}", namespace, pod_name);
+                Ok((fault_id, true))
             }
             Err(kube::Error::Api(err_resp)) if err_resp.code == 429 => {
                 // PDB is blocking the eviction — this is expected behavior
@@ -116,12 +118,10 @@ impl FaultOperator {
                     namespace, pod_name, err_resp.code, err_resp.message
                 );
                 self.timeline.emit(EventKind::FaultReverted { fault_id });
+                Ok((fault_id, false))
             }
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to evict pod {}: {}", pod_name, e));
-            }
+            Err(e) => Err(anyhow::anyhow!("Failed to evict pod {}: {}", pod_name, e)),
         }
-        Ok(fault_id)
     }
 
     /// Execute a network command on a pod, dispatching based on the inject method.
