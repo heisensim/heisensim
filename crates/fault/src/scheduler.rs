@@ -17,6 +17,8 @@ pub enum FaultType {
     Stress { cpu_workers: u32, mem_bytes: u64 },
     /// Block DNS resolution on the target pod.
     Dns,
+    /// Evict the target pod via K8s Eviction API (tests PodDisruptionBudgets).
+    Eviction,
 }
 
 /// A scheduled fault to be injected.
@@ -183,6 +185,7 @@ mod tests {
                 mem_bytes: 1024,
             },
             FaultType::Dns,
+            FaultType::Eviction,
         ];
         let pods = vec!["p1".to_string(), "p2".to_string(), "p3".to_string()];
         let mut s = FaultScheduler::new(42, faults.clone(), pods.clone(), "ns".to_string());
@@ -198,7 +201,7 @@ mod tests {
             seen_pods.insert(f.target_pod);
         }
 
-        assert_eq!(seen_faults.len(), 5);
+        assert_eq!(seen_faults.len(), 6);
         assert_eq!(seen_pods.len(), 3);
     }
 
@@ -225,6 +228,8 @@ mod tests {
                 FaultType::Partition,
                 FaultType::Dns,
                 FaultType::Stress { cpu_workers: 1, mem_bytes: 1024 },
+                FaultType::Eviction,
+                FaultType::Latency { delay_ms: 100, jitter_ms: 50 },
             ];
             let pods = vec!["p1".to_string(), "p2".to_string()];
             let mut s = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());
@@ -255,6 +260,8 @@ mod tests {
                 FaultType::Partition,
                 FaultType::Dns,
                 FaultType::Stress { cpu_workers: 1, mem_bytes: 1024 },
+                FaultType::Eviction,
+                FaultType::Latency { delay_ms: 100, jitter_ms: 50 },
             ];
             let pods = vec!["p1".to_string(), "p2".to_string()];
             let mut s1 = FaultScheduler::new(seed, faults.clone(), pods.clone(), "ns".to_string());

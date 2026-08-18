@@ -2,6 +2,7 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
     let mut pod_verbs = vec!["get", "list"];
     let mut has_exec = false;
     let mut has_ephemeral = false;
+    let mut has_eviction = false;
 
     for fault in faults {
         let fault = fault.trim();
@@ -10,6 +11,9 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
         }
         if fault == "latency" || fault == "partition" || fault == "stress" || fault == "dns" {
             has_exec = true;
+        }
+        if fault == "eviction" {
+            has_eviction = true;
         }
         if fault == "latency"
             || fault == "partition"
@@ -38,6 +42,12 @@ pub fn generate_rbac(namespace: &str, faults: &[String], service_account_name: &
 
     if has_ephemeral {
         rules.push_str("  - apiGroups: [\"\"]\n    resources: [\"pods/ephemeralcontainers\"]\n    verbs: [\"update\"]\n");
+    }
+
+    if has_eviction {
+        rules.push_str(
+            "  - apiGroups: [\"\"]\n    resources: [\"pods/eviction\"]\n    verbs: [\"create\"]\n",
+        );
     }
 
     format!(

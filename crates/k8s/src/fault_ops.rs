@@ -47,7 +47,12 @@ impl FaultOperator {
     }
 
     /// Inject a pod crash by deleting the pod.
-    pub async fn inject_pod_crash(&self, namespace: &str, pod_name: &str) -> Result<Uuid> {
+    pub async fn inject_pod_crash(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        grace_period_secs: Option<u32>,
+    ) -> Result<Uuid> {
         let api: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -63,7 +68,15 @@ impl FaultOperator {
 
         info!(pod = pod_name, "Injecting pod crash: deleting pod");
         drop(_guard); // Must drop before .await (EnteredSpan is !Send)
-        api.delete(pod_name, &DeleteParams::default())
+        let dp = if let Some(gp) = grace_period_secs {
+            DeleteParams {
+                grace_period_seconds: Some(gp),
+                ..Default::default()
+            }
+        } else {
+            DeleteParams::default()
+        };
+        api.delete(pod_name, &dp)
             .await
             .context("Failed to delete pod")?;
 
@@ -75,6 +88,40 @@ impl FaultOperator {
         });
 
         Ok(fault_id)
+    }
+
+    /// Inject an eviction fault (tests PDBs).
+    /// Returns `(fault_id, evicted)` where `evicted` is false if PDB blocked it.
+    pub async fn inject_eviction(&self, namespace: &str, pod_name: &str) -> Result<(Uuid, bool)> {
+        let fault_id = Uuid::new_v4();
+
+        self.timeline.emit(EventKind::FaultInjected {
+            fault_id,
+            fault_kind: "eviction".to_string(),
+            target: pod_name.to_string(),
+            duration_secs: None,
+        });
+
+        use kube::api::EvictParams;
+
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
+
+        match pods.evict(pod_name, &EvictParams::default()).await {
+            Ok(_) => {
+                info!("Evicted pod {}/{}", namespace, pod_name);
+                Ok((fault_id, true))
+            }
+            Err(kube::Error::Api(err_resp)) if err_resp.code == 429 => {
+                // PDB is blocking the eviction — this is expected behavior
+                info!(
+                    "Eviction of {}/{} blocked by PodDisruptionBudget (HTTP {}): {}",
+                    namespace, pod_name, err_resp.code, err_resp.message
+                );
+                self.timeline.emit(EventKind::FaultReverted { fault_id });
+                Ok((fault_id, false))
+            }
+            Err(e) => Err(anyhow::anyhow!("Failed to evict pod {}: {}", pod_name, e)),
+        }
     }
 
     /// Execute a network command on a pod, dispatching based on the inject method.

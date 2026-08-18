@@ -217,6 +217,8 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             output: super::OutputFormat::Text,
             otel_endpoint: None,
             mock: false,
+            crash_grace_period: None,
+            profile: None,
         };
         super::handle_run(args, None).await?
     } else {
@@ -244,6 +246,8 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             bisect: false,
             explore_strategy: super::ExploreStrategyArg::Random,
             mock: false,
+            crash_grace_period: None,
+            profile: None,
         };
 
         let explore_exit = super::handle_explore(explore_args).await?;
@@ -276,6 +280,8 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
                 output: super::OutputFormat::Text,
                 otel_endpoint: None,
                 mock: false,
+                crash_grace_period: None,
+                profile: None,
             };
 
             let replay_exit = super::handle_run(replay_args, None).await?;
