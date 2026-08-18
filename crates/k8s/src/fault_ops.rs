@@ -109,7 +109,7 @@ impl FaultOperator {
             Ok(_) => {
                 info!("Evicted pod {}/{}", namespace, pod_name);
             }
-            Err(kube::Error::Api(err_resp)) if err_resp.code == 429 || err_resp.code == 500 => {
+            Err(kube::Error::Api(err_resp)) if err_resp.code == 429 => {
                 // PDB is blocking the eviction — this is expected behavior
                 info!(
                     "Eviction of {}/{} blocked by PodDisruptionBudget (HTTP {}): {}",

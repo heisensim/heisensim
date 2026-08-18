@@ -211,6 +211,26 @@ struct ReplayArgs {
 
     #[arg(long)]
     config: Option<PathBuf>,
+
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction)
+    #[arg(
+        long,
+        default_value = "crash,latency,partition,stress,dns",
+        value_delimiter = ','
+    )]
+    faults: Vec<String>,
+
+    /// Method for injecting network faults
+    #[arg(long, default_value = "exec", value_enum)]
+    inject_method: InjectMethod,
+
+    /// Grace period in seconds for crash faults (default: K8s default 30s).
+    #[arg(long)]
+    crash_grace_period: Option<u32>,
+
+    /// Fault profile preset. Overrides --faults when set.
+    #[arg(long, value_enum, conflicts_with = "faults")]
+    profile: Option<FaultProfile>,
 }
 
 #[derive(Args, Debug)]
@@ -857,13 +877,7 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
 
     let duration = parse_duration(&args.duration)?;
     let warmup = std::time::Duration::from_secs(10);
-    let faults = vec![
-        "crash".to_string(),
-        "latency".to_string(),
-        "partition".to_string(),
-        "stress".to_string(),
-        "dns".to_string(),
-    ];
+    let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
 
     let _result = run_single_simulation(
         &client,
@@ -871,9 +885,9 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
         args.seed,
         duration,
         warmup,
-        &faults,
-        InjectMethod::Exec,
-        None, // crash_grace_period
+        &resolved_faults,
+        args.inject_method,
+        args.crash_grace_period,
         &[],
     )
     .await?;
