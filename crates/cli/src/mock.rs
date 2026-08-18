@@ -156,13 +156,14 @@ pub async fn handle_mock_run(
     println!("  Duration: {}", args.duration);
     println!("  Seed: 0x{:04X}", seed);
     println!("  Warmup: {}", args.warmup);
-    println!("  Faults: {:?}", args.faults);
+    let resolved_faults = super::resolve_faults(&args.faults, args.profile.as_ref());
+    println!("  Faults: {:?}", resolved_faults);
 
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
     info!("Starting mock simulation...");
-    let timeline = run_mock_simulation(seed, duration, warmup, &args.faults, 3);
+    let timeline = run_mock_simulation(seed, duration, warmup, &resolved_faults, 3);
 
     let final_events = timeline.events();
     info!("Simulation complete. Rendering report...");
@@ -248,6 +249,8 @@ pub async fn handle_mock_explore(args: &ExploreArgs) -> Result<i32> {
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
+    let resolved_faults = super::resolve_faults(&args.faults, args.profile.as_ref());
+
     if args.bisect {
         warn!("--bisect is not performed in mock mode");
     }
@@ -263,7 +266,7 @@ pub async fn handle_mock_explore(args: &ExploreArgs) -> Result<i32> {
         println!(
             "║  Namespace: {:16} │  Faults: {:20} ║",
             args.namespace,
-            args.faults.join(",")
+            resolved_faults.join(",")
         );
         println!("╚══════════════════════════════════════════════════════════════╝");
         println!();
@@ -307,7 +310,7 @@ pub async fn handle_mock_explore(args: &ExploreArgs) -> Result<i32> {
         for &seed in &batch {
             info!(seed = seed, "🔬 Starting seed 0x{:04X}...", seed);
 
-            let timeline = run_mock_simulation(seed, duration, warmup, &args.faults, 3);
+            let timeline = run_mock_simulation(seed, duration, warmup, &resolved_faults, 3);
             let events = timeline.events();
             let summary = heisensim_timeline::query::summary(&events);
 
