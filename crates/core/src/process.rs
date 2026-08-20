@@ -1,6 +1,6 @@
 use crate::types::{NodeId, ProcessId, VirtualTime};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// The state of a simulated process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct TrackedProcess {
 /// Table tracking all processes across all simulated nodes.
 #[derive(Debug, Default)]
 pub struct ProcessTable {
-    processes: HashMap<ProcessId, TrackedProcess>,
+    processes: BTreeMap<ProcessId, TrackedProcess>,
     next_pid: u32,
 }
 

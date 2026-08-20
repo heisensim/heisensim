@@ -47,3 +47,4 @@ opentelemetry = { version = "0.32", features = ["trace", "metrics"] }
 opentelemetry_sdk = { version = "0.32", features = ["trace", "metrics", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["reqwest-client", "reqwest-blocking-client", "trace", "metrics", "http-proto"] }
 tracing-opentelemetry = "0.33"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }

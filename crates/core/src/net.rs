@@ -2,7 +2,7 @@ use crate::seed::SimSeed;
 use crate::types::{NodeId, VirtualTime};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A message sent over the virtual network.
 #[derive(Debug, Clone)]
@@ -17,8 +17,8 @@ pub struct Message {
 #[derive(Debug, Clone)]
 pub struct Partition {
     pub id: u64,
-    pub nodes_a: HashSet<NodeId>,
-    pub nodes_b: HashSet<NodeId>,
+    pub nodes_a: BTreeSet<NodeId>,
+    pub nodes_b: BTreeSet<NodeId>,
 }
 
 /// The virtual network mediating communication between simulated nodes.
@@ -34,12 +34,16 @@ pub struct VirtualNetwork {
 impl VirtualNetwork {
     /// Creates a new `VirtualNetwork` using the provided seed.
     pub fn new(seed: SimSeed) -> Self {
+        Self::new_seeded(seed.0)
+    }
+
+    pub fn new_seeded(seed: u64) -> Self {
         Self {
             pending_messages: BTreeMap::new(),
             active_partitions: Vec::new(),
             drop_probability: 0.0,
-            delay_range_ms: (1, 10), // Default 1-10ms delay
-            rng: StdRng::seed_from_u64(seed.0),
+            delay_range_ms: (1, 10),
+            rng: StdRng::seed_from_u64(seed),
             next_partition_id: 0,
         }
     }
@@ -55,7 +59,7 @@ impl VirtualNetwork {
     }
 
     /// Adds a network partition between two sets of nodes. Returns the partition ID.
-    pub fn add_partition(&mut self, nodes_a: HashSet<NodeId>, nodes_b: HashSet<NodeId>) -> u64 {
+    pub fn add_partition(&mut self, nodes_a: BTreeSet<NodeId>, nodes_b: BTreeSet<NodeId>) -> u64 {
         let id = self.next_partition_id;
         self.next_partition_id += 1;
         self.active_partitions.push(Partition {
@@ -69,6 +73,10 @@ impl VirtualNetwork {
     /// Removes a network partition by ID.
     pub fn remove_partition(&mut self, id: u64) {
         self.active_partitions.retain(|p| p.id != id);
+    }
+
+    pub fn has_partition_between(&self, from: NodeId, to: NodeId) -> bool {
+        self.is_partitioned(from, to)
     }
 
     /// Checks if communication between two nodes is partitioned.
@@ -167,9 +175,9 @@ mod tests {
         let node2 = NodeId(2);
         let node3 = NodeId(3);
 
-        let mut a = HashSet::new();
+        let mut a = BTreeSet::new();
         a.insert(node1);
-        let mut b = HashSet::new();
+        let mut b = BTreeSet::new();
         b.insert(node2);
 
         let part_id = net.add_partition(a, b);

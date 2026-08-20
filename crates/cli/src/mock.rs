@@ -347,7 +347,6 @@ pub async fn handle_mock_explore(args: &ExploreArgs) -> Result<i32> {
                 seed,
                 total_faults: summary.total_faults,
                 total_failures: summary.total_failures,
-                total_probes: 3 * summary.duration.as_secs() as usize,
                 duration_secs: summary.duration.as_secs_f64(),
                 findings: findings.clone(),
                 verdicts: verdicts.clone(),

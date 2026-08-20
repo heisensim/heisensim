@@ -174,3 +174,15 @@ pub fn print_verdicts(verdicts: &[PropertyVerdict]) {
     }
     println!();
 }
+
+/// Evaluates a list of properties against a timeline of events.
+pub fn evaluate_properties(
+    events: &[heisensim_timeline::event::TimelineEvent],
+    defs: &[PropertyDef],
+) -> Vec<PropertyVerdict> {
+    if let Ok(checker) = build_checker(defs) {
+        checker.evaluate_all(events)
+    } else {
+        Vec::new()
+    }
+}

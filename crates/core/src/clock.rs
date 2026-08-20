@@ -1,61 +1,95 @@
-use crate::types::{NodeId, VirtualTime};
+use crate::types::VirtualTime;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 /// A timer registered in the virtual clock.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Timer {
-    /// The time at which this timer should wake.
+/// Generic over payload `T` so the clock doesn't know about domain types.
+#[derive(Debug, Clone)]
+pub struct Timer<T> {
     pub wake_time: VirtualTime,
-    /// The target node associated with this timer.
-    pub target: NodeId,
-    /// A unique identifier for the callback or event.
     pub callback_id: u64,
+    pub priority: u8,
+    pub payload: T,
+}
+
+// Manual Ord impl: sort by (wake_time, priority, callback_id)
+impl<T> PartialEq for Timer<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.wake_time == other.wake_time
+            && self.priority == other.priority
+            && self.callback_id == other.callback_id
+    }
+}
+impl<T> Eq for Timer<T> {}
+
+impl<T> PartialOrd for Timer<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<T> Ord for Timer<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.wake_time
+            .cmp(&other.wake_time)
+            .then(self.priority.cmp(&other.priority))
+            .then(self.callback_id.cmp(&other.callback_id))
+    }
 }
 
 /// The virtual clock managing simulation time and timers.
-#[derive(Debug, Default)]
-pub struct VirtualClock {
+pub struct VirtualClock<T> {
     current_time: VirtualTime,
-    timers: BinaryHeap<Reverse<Timer>>,
+    timers: BinaryHeap<Reverse<Timer<T>>>,
     next_callback_id: u64,
 }
 
-impl VirtualClock {
-    /// Creates a new `VirtualClock` starting at time 0.
+impl<T> Default for VirtualClock<T> {
+    fn default() -> Self {
+        Self {
+            current_time: VirtualTime(0),
+            timers: BinaryHeap::new(),
+            next_callback_id: 0,
+        }
+    }
+}
+
+impl<T> VirtualClock<T> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Returns the current virtual time.
     pub fn now(&self) -> VirtualTime {
         self.current_time
     }
 
-    /// Advances the clock to the specified time, returning an error if it's in the past.
-    pub fn advance_to(&mut self, time: VirtualTime) {
-        if time > self.current_time {
-            self.current_time = time;
-        }
-    }
-
-    /// Registers a timer to wake a node after a duration. Returns the callback id.
-    pub fn sleep(&mut self, node: NodeId, duration: VirtualTime) -> u64 {
-        let wake_time = self.current_time + duration;
+    /// Schedule a timer with a payload and priority.
+    /// Lower priority values fire first at the same wake_time.
+    pub fn schedule(&mut self, wake_time: VirtualTime, priority: u8, payload: T) -> u64 {
         let callback_id = self.next_callback_id;
         self.next_callback_id += 1;
-
         self.timers.push(Reverse(Timer {
             wake_time,
-            target: node,
             callback_id,
+            priority,
+            payload,
         }));
-
         callback_id
     }
 
-    /// Advances to the next timer (if any) and returns all expired timers up to the new time.
-    pub fn tick(&mut self) -> Vec<Timer> {
+    /// Schedule a timer relative to current time.
+    pub fn schedule_after(&mut self, delay: VirtualTime, priority: u8, payload: T) -> u64 {
+        let wake_time = self.current_time + delay;
+        self.schedule(wake_time, priority, payload)
+    }
+
+    /// Returns true if there are no pending timers.
+    pub fn is_empty(&self) -> bool {
+        self.timers.is_empty()
+    }
+
+    /// Advances to the next timer and returns all expired timers up to that time.
+    #[must_use]
+    pub fn tick(&mut self) -> Vec<Timer<T>> {
         let mut expired = Vec::new();
 
         if let Some(Reverse(next_timer)) = self.timers.peek() {
@@ -82,42 +116,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clock_advance_elapsed_reset() {
-        let mut clock = VirtualClock::new();
-        assert_eq!(clock.now(), VirtualTime(0));
-        clock.advance_to(VirtualTime(100));
-        assert_eq!(clock.now(), VirtualTime(100));
-        // Can't go backward
-        clock.advance_to(VirtualTime(50));
-        assert_eq!(clock.now(), VirtualTime(100));
-    }
-
-    #[test]
-    fn test_clock_sleep_and_tick() {
-        let mut clock = VirtualClock::new();
-        let target1 = NodeId(1);
-        let target2 = NodeId(2);
-
-        let cb1 = clock.sleep(target1, VirtualTime(100));
-        let cb2 = clock.sleep(target2, VirtualTime(200));
-        let cb3 = clock.sleep(target1, VirtualTime(50));
+    fn test_clock_schedule_and_tick() {
+        let mut clock: VirtualClock<&str> = VirtualClock::new();
+        let _cb1 = clock.schedule_after(VirtualTime(100), 0, "timer-a");
+        let _cb2 = clock.schedule_after(VirtualTime(200), 0, "timer-b");
+        let _cb3 = clock.schedule_after(VirtualTime(50), 0, "timer-c");
 
         let expired = clock.tick();
         assert_eq!(clock.now(), VirtualTime(50));
         assert_eq!(expired.len(), 1);
-        assert_eq!(expired[0].callback_id, cb3);
+        assert_eq!(expired[0].payload, "timer-c");
 
         let expired = clock.tick();
         assert_eq!(clock.now(), VirtualTime(100));
         assert_eq!(expired.len(), 1);
-        assert_eq!(expired[0].callback_id, cb1);
+        assert_eq!(expired[0].payload, "timer-a");
 
         let expired = clock.tick();
         assert_eq!(clock.now(), VirtualTime(200));
         assert_eq!(expired.len(), 1);
-        assert_eq!(expired[0].callback_id, cb2);
+        assert_eq!(expired[0].payload, "timer-b");
 
         let expired = clock.tick();
         assert!(expired.is_empty());
+        assert!(clock.is_empty());
+    }
+
+    #[test]
+    fn test_clock_priority_ordering() {
+        let mut clock: VirtualClock<&str> = VirtualClock::new();
+        // Same wake_time, different priorities
+        clock.schedule(VirtualTime(100), 10, "probe"); // lower priority (fires second)
+        clock.schedule(VirtualTime(100), 0, "fault"); // higher priority (fires first)
+
+        let expired = clock.tick();
+        assert_eq!(expired.len(), 2);
+        assert_eq!(expired[0].payload, "fault"); // priority 0 first
+        assert_eq!(expired[1].payload, "probe"); // priority 10 second
     }
 }
