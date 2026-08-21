@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-08-19
+
+### Added
+- **Deterministic Simulation Engine**: New `heisensim simulate` subcommand for shift-left chaos testing
+  - Same seed → same timeline hash → reproducible results
+  - Discrete-event loop using `VirtualClock<T>` with priority ordering
+  - Simulates 5 minutes of chaos in <500ms wall time
+  - VirtualNetwork integration for realistic probe routing
+  - Timeline hash (xxh64) for determinism proof
+  - `--time-scale` for watchable terminal output
+- Generic `Timer<T>` in VirtualClock with priority-based ordering
+- `VirtualNetwork::new_seeded()` and `has_partition_between()` for deterministic network simulation
+- `VirtualTime::as_std_duration()` bridge method
+
+### Changed
+- `ProcessTable` uses `BTreeMap` for deterministic iteration order
+- `VirtualNetwork` partitions use `BTreeSet` for deterministic behavior
+- `--mock` flag is now deprecated in favor of `heisensim simulate`
+
+### Fixed  
+- Deterministic UUIDs (seeded RNG instead of OS entropy)
+- Deterministic timestamps (fixed epoch instead of wall clock)
+
 ## [0.7.0] - 2026-08-14
 
 ### Added
@@ -50,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew tap installation
 - GitHub Actions CI/CD
 
+[0.9.0]: https://github.com/heisensim/heisensim/compare/v0.7.0...v0.9.0
 [0.7.0]: https://github.com/heisensim/heisensim/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/heisensim/heisensim/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/heisensim/heisensim/compare/v0.4.0...v0.5.0

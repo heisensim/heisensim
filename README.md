@@ -150,7 +150,7 @@ Properties produce verdicts with details:
 - **Monitors health probes during faults** — HTTP, TCP, gRPC, exec probes
 - **Correlates faults to failures** — microsecond-precision event timeline
 - **OpenTelemetry correlation** — links fault spans to your application traces via `traceparent`
-- **Deterministic replay** — same seed = same faults = same results
+- **Deterministic replay & simulation** — same seed = same faults = same results (`simulate` runs entirely in-memory)
 - **Property checking** — verify SLA invariants automatically
 - **Explore mode** — run many seeds in parallel to find interesting failures
 - **JSON output** — `--output json` for CI pipeline integration
@@ -177,6 +177,38 @@ heisensim run --namespace demo --seed 42 --duration 2m --config heisensim.toml
 | `--output` | `terminal` | Output format: `terminal`, `json`, `markdown` |
 | `--otel-endpoint` | — | OTLP endpoint for trace correlation |
 | `--k3d` | — | Spin up ephemeral K3d cluster |
+
+### `heisensim simulate`
+
+Run a deterministic in-memory chaos simulation. No Kubernetes cluster required.
+Same seed always produces the same timeline hash.
+
+```bash
+# Basic simulation
+heisensim simulate --seed 0x42 --duration 5m
+
+# Watch events unfold at 100x speed
+heisensim simulate --seed 0x42 --duration 5m --time-scale 100x
+
+# JSON output for CI pipelines
+heisensim simulate --seed 0x42 --duration 5m --output json
+
+# Custom fault mix and pod count
+heisensim simulate --seed 0x42 --duration 10m --faults crash,latency,partition --pods 5
+```
+
+| Flag | Default | Description |
+|:---|:---|:---|
+| `--seed` | random | Simulation seed (hex `0xBEEF` or decimal `42`) |
+| `--duration` | `5m` | Virtual simulation duration |
+| `--warmup` | `30s` | Warmup period before faults begin |
+| `--faults` | all | Comma-separated fault types |
+| `--pods` | `3` | Number of simulated pods |
+| `--time-scale` | `instant` | Playback speed (`100x`, `10x`, `instant`) |
+| `--output` | `text` | Output format (`text`, `json`, `junit`, `html`) |
+| `--profile` | none | Fault preset (`standard`, `aggressive`) |
+
+> **Note:** The old `--mock` flag is deprecated in favor of `heisensim simulate`.
 
 ### `heisensim explore`
 
@@ -243,7 +275,7 @@ heisensim/
 - **Phase 2 ✅**: Property checking, explore mode, ephemeral container injection, gRPC probes
 - **Phase 2.5 ✅**: OpenTelemetry correlation, JSON output, CI pipeline support, crates.io publish
 - **Phase 3 🔜**: GitHub Action (`uses: heisensim/action@v1`), docs site, eBPF network partitions
-- **Phase 4 📋**: Process-level determinism (seccomp-BPF / ptrace)
+- **Phase 4 📋**: Process-level determinism (seccomp-BPF / ptrace) [Virtual clock partially complete]
 
 ---
 

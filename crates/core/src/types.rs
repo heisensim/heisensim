@@ -32,6 +32,11 @@ impl VirtualTime {
     pub fn as_secs(&self) -> u64 {
         self.0 / 1_000_000_000
     }
+
+    /// Converts to std::time::Duration for timeline events.
+    pub fn as_std_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.0)
+    }
 }
 
 impl Add for VirtualTime {
@@ -67,7 +72,7 @@ impl fmt::Display for VirtualTime {
 }
 
 /// Represents a simulated process ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProcessId(pub u32);
 
 /// Represents the kinds of faults that can be injected into the simulation.

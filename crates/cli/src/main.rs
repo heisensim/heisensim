@@ -14,12 +14,14 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod demo;
+pub mod dst;
 mod metrics;
 mod mock;
 mod properties;
 mod rbac;
 mod report;
 mod report_html;
+pub mod simulate;
 
 /// ASCII art banner printed on CLI startup.
 const BANNER: &str = r#"
@@ -48,6 +50,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Run a discrete-event simulation of the cluster locally
+    Simulate(simulate::SimulateArgs),
+
     /// Run a simulation test with specified topology and fault injection rules
     Run(RunArgs),
 
@@ -157,7 +162,7 @@ pub enum FaultProfile {
     Aggressive,
 }
 
-fn resolve_faults(faults: &[String], profile: Option<&FaultProfile>) -> Vec<String> {
+pub fn resolve_faults(faults: &[String], profile: Option<&FaultProfile>) -> Vec<String> {
     if let Some(p) = profile {
         match p {
             FaultProfile::Standard => vec!["crash", "latency", "partition", "stress", "dns"]
@@ -187,7 +192,7 @@ enum InjectMethod {
 
 /// Output format for results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum OutputFormat {
+pub enum OutputFormat {
     /// Human-readable terminal output
     Text,
     /// Machine-readable JSON (for CI pipelines)
@@ -196,6 +201,15 @@ enum OutputFormat {
     Junit,
     /// HTML timeline visualization
     Html,
+}
+
+pub fn parse_seed(s: &str) -> Result<u64> {
+    if let Some(stripped) = s.strip_prefix("0x") {
+        u64::from_str_radix(stripped, 16).map_err(|e| anyhow::anyhow!("Invalid hex seed: {}", e))
+    } else {
+        s.parse::<u64>()
+            .map_err(|e| anyhow::anyhow!("Invalid decimal seed: {}", e))
+    }
 }
 
 #[derive(Args, Debug)]
@@ -442,6 +456,7 @@ async fn main() -> Result<()> {
     }
 
     let exit_code = match cli.command {
+        Commands::Simulate(args) => simulate::handle_simulate(args).await?,
         Commands::Run(args) => handle_run(args, _otel_provider.as_ref().map(|p| &p.1)).await?,
         Commands::Replay(args) => {
             handle_replay(args).await?;
@@ -506,6 +521,9 @@ async fn handle_run(
     let seed = args.seed.unwrap_or_else(|| rand::rng().random());
 
     if args.mock {
+        tracing::warn!(
+            "--mock is deprecated. Use `heisensim simulate` for a fully deterministic in-memory simulation engine instead."
+        );
         return mock::handle_mock_run(&args, meter_provider).await;
     }
 
@@ -836,7 +854,7 @@ async fn handle_run(
 }
 
 /// Parse a duration string like "30s", "2m", "1h" into std::time::Duration
-fn parse_duration(s: &str) -> Result<std::time::Duration> {
+pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
     let s = s.trim();
     if let Some(secs) = s.strip_suffix('s') {
         Ok(std::time::Duration::from_secs(
@@ -1144,17 +1162,15 @@ async fn handle_rbac(args: RbacArgs) -> Result<()> {
 }
 
 /// Result of a single simulation run, used by explore mode.
-#[allow(dead_code)]
 pub(crate) struct SimulationResult {
-    seed: u64,
-    total_faults: usize,
-    total_failures: usize,
-    total_probes: usize,
-    duration_secs: f64,
-    findings: Vec<String>,
+    pub seed: u64,
+    pub total_faults: usize,
+    pub total_failures: usize,
+    pub duration_secs: f64,
+    pub findings: Vec<String>,
     /// Property verdicts (empty if no properties configured)
-    verdicts: Vec<heisensim_props::PropertyVerdict>,
-    events: Vec<heisensim_timeline::event::TimelineEvent>,
+    pub verdicts: Vec<heisensim_props::PropertyVerdict>,
+    pub events: Vec<heisensim_timeline::event::TimelineEvent>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1173,7 +1189,6 @@ async fn run_single_simulation(
 
     // Discover and scrape probes
     let probes = heisensim_k8s::probe_scraper::scrape_probes(client, namespace).await?;
-    let total_probes = probes.len();
 
     handle.emit(heisensim_timeline::EventKind::SimulationStarted {
         seed,
@@ -1307,7 +1322,6 @@ async fn run_single_simulation(
         seed,
         total_faults: summary.total_faults,
         total_failures: summary.total_failures,
-        total_probes,
         duration_secs: duration.as_secs_f64(),
         findings,
         verdicts,
@@ -1319,6 +1333,9 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     anyhow::ensure!(args.parallel > 0, "--parallel must be at least 1");
 
     if args.mock {
+        tracing::warn!(
+            "--mock is deprecated. Use `heisensim simulate` for a fully deterministic in-memory simulation engine instead."
+        );
         return mock::handle_mock_explore(&args).await;
     }
 
