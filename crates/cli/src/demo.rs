@@ -227,6 +227,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
 
         let explore_args = super::ExploreArgs {
             namespace: NAMESPACE.to_string(),
+            simulate: false,
             duration: duration.to_string(),
             warmup: "10s".to_string(),
             seeds: 5,

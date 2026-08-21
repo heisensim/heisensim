@@ -41,6 +41,10 @@ pub struct SimulateArgs {
     /// Fault profile preset
     #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
+
+    /// Path to heisensim.toml config file
+    #[arg(long)]
+    config: Option<std::path::PathBuf>,
 }
 
 pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
@@ -57,6 +61,12 @@ pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
     // Resolve faults from profile
     let resolved_faults = crate::resolve_faults(&args.faults, args.profile.as_ref());
 
+    let property_defs = if let Some(ref config_path) = args.config {
+        crate::properties::load_and_validate(config_path)?
+    } else {
+        Vec::new()
+    };
+
     let config = DstConfig {
         seed,
         duration: VirtualTime::from_millis(duration.as_millis() as u64),
@@ -64,7 +74,7 @@ pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
         faults: resolved_faults,
         pod_count: args.pods,
         probe_interval: VirtualTime::from_secs(5),
-        property_defs: Vec::new(), // TODO: load from config file
+        property_defs,
     };
 
     let start = std::time::Instant::now();
@@ -89,26 +99,53 @@ pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
         anyhow::bail!("--time-scale must be positive, got '{}'", args.time_scale);
     }
 
-    if args.output == OutputFormat::Text {
-        // Render in a blocking task since --time-scale uses thread::sleep
-        tokio::task::spawn_blocking(move || {
-            render_simulate_output(&result, time_scale, wall_time);
-        })
-        .await?;
+    let exit_code = if result.verdicts.iter().any(|v| !v.passed) {
+        1
     } else {
-        // JSON output
-        let json = serde_json::json!({
-            "seed": format!("0x{:04X}", result.seed),
-            "hash": format!("{:016x}", result.hash),
-            "total_faults": result.total_faults,
-            "total_failures": result.total_failures,
-            "events": result.events,
-            "verdicts": result.verdicts,
-        });
-        println!("{}", serde_json::to_string_pretty(&json)?);
+        0
+    };
+
+    match args.output {
+        OutputFormat::Text => {
+            // Render in a blocking task since --time-scale uses thread::sleep
+            tokio::task::spawn_blocking(move || {
+                render_simulate_output(&result, time_scale, wall_time);
+            })
+            .await?;
+        }
+        OutputFormat::Json => {
+            let json = serde_json::json!({
+                "seed": result.seed,
+                "seed_hex": format!("0x{:04X}", result.seed),
+                "hash": format!("{:016x}", result.hash),
+                "total_faults": result.total_faults,
+                "total_failures": result.total_failures,
+                "events": result.events,
+                "verdicts": result.verdicts,
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        OutputFormat::Junit => {
+            let junit = crate::report::render_junit_report(&result.events, &result.verdicts);
+            println!("{}", junit);
+        }
+        OutputFormat::Html => {
+            let duration_secs = result
+                .events
+                .last()
+                .map(|e| e.elapsed.as_secs_f64())
+                .unwrap_or(0.0);
+            let html = crate::report_html::render_html_report(
+                &result.events,
+                &result.verdicts,
+                result.seed,
+                duration_secs,
+            );
+            println!("{}", html);
+        }
     }
 
-    Ok(0)
+    Ok(exit_code)
 }
 
 fn render_simulate_output(result: &DstResult, time_scale: f64, wall_time: std::time::Duration) {

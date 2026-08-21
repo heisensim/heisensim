@@ -276,6 +276,10 @@ struct ExploreArgs {
     #[arg(long, default_value = "default")]
     namespace: String,
 
+    /// Use deterministic simulation engine instead of live Kubernetes
+    #[arg(long)]
+    simulate: bool,
+
     /// Duration of each individual simulation run
     #[arg(long, default_value = "30s")]
     duration: String,
@@ -1339,6 +1343,21 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         return mock::handle_mock_explore(&args).await;
     }
 
+    if args.simulate {
+        if args.bisect {
+            warn!("--bisect is not supported with --simulate and will be ignored");
+        }
+        if args.parallel != 3 {
+            warn!(
+                "--parallel is not used with --simulate (simulation is single-threaded and instant)"
+            );
+        }
+        if args.namespace != "default" {
+            warn!("--namespace is not used with --simulate (no cluster connection)");
+        }
+        return handle_simulate_explore(&args).await;
+    }
+
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
@@ -1493,18 +1512,7 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
                     }
 
                     if strategy == heisensim_fault::explorer::ExploreStrategy::Coverage {
-                        let mut combos = std::collections::HashSet::new();
-                        for ev in &result.events {
-                            if let heisensim_timeline::EventKind::FaultInjected {
-                                fault_kind,
-                                target,
-                                ..
-                            } = &ev.kind
-                            {
-                                combos.insert((fault_kind.clone(), target.clone()));
-                            }
-                        }
-                        explorer.record_coverage(combos);
+                        explorer.record_coverage(fault_target_combos(&result.events));
                     }
 
                     let icon = if props_failed {
@@ -1621,4 +1629,172 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Extract unique (fault_kind, target) combinations from timeline events for coverage tracking.
+fn fault_target_combos(
+    events: &[heisensim_timeline::event::TimelineEvent],
+) -> std::collections::HashSet<(String, String)> {
+    let mut combos = std::collections::HashSet::new();
+    for ev in events {
+        if let heisensim_timeline::EventKind::FaultInjected {
+            fault_kind, target, ..
+        } = &ev.kind
+        {
+            combos.insert((fault_kind.clone(), target.clone()));
+        }
+    }
+    combos
+}
+
+async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
+    let duration = parse_duration(&args.duration)?;
+    let warmup = parse_duration(&args.warmup)?;
+    let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
+
+    // Load and validate property definitions
+    let property_defs = if let Some(ref config_path) = args.config {
+        properties::load_and_validate(config_path)?
+    } else {
+        Vec::new()
+    };
+
+    if args.output == OutputFormat::Text {
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!(
+            "║  HEISENSIM EXPLORE (simulate)          {} seeds, {}s each   ║",
+            args.seeds,
+            duration.as_secs()
+        );
+        println!("╠══════════════════════════════════════════════════════════════╣");
+    }
+
+    let strategy = match args.explore_strategy {
+        ExploreStrategyArg::Random => heisensim_fault::explorer::ExploreStrategy::Random,
+        ExploreStrategyArg::Coverage => heisensim_fault::explorer::ExploreStrategy::Coverage,
+        ExploreStrategyArg::Sequential => heisensim_fault::explorer::ExploreStrategy::Sequential,
+    };
+    let mut explorer = heisensim_fault::explorer::StrategicExplorer::new(strategy, args.start_seed);
+
+    let start = std::time::Instant::now();
+    let mut interesting_seeds: Vec<u64> = Vec::new();
+    let mut all_results: Vec<(u64, crate::dst::DstResult)> = Vec::new();
+    let mut any_prop_failures = false;
+
+    for _ in 0..args.seeds {
+        let seed = explorer.next_seed();
+        let config = crate::dst::DstConfig {
+            seed,
+            duration: heisensim_core::types::VirtualTime::from_millis(duration.as_millis() as u64),
+            warmup: heisensim_core::types::VirtualTime::from_millis(warmup.as_millis() as u64),
+            faults: resolved_faults.clone(),
+            pod_count: 3,
+            probe_interval: heisensim_core::types::VirtualTime::from_secs(5),
+            property_defs: property_defs.clone(),
+        };
+
+        let result = match crate::dst::run(config) {
+            Ok(r) => r,
+            Err(e) => {
+                if args.output == OutputFormat::Text {
+                    println!("  ❌ seed 0x{:04X}  │  ERROR: {}", seed, e);
+                }
+                continue;
+            }
+        };
+
+        let has_failures = result.total_failures > 0;
+        let props_failed = result.verdicts.iter().any(|v| !v.passed);
+        if props_failed {
+            any_prop_failures = true;
+        }
+        if has_failures || props_failed {
+            interesting_seeds.push(seed);
+        }
+
+        if args.output == OutputFormat::Text {
+            let icon = if props_failed {
+                "❌"
+            } else if has_failures {
+                "🐛"
+            } else {
+                "✅"
+            };
+            let props_str = if result.verdicts.is_empty() {
+                String::new()
+            } else {
+                let passed = result.verdicts.iter().filter(|v| v.passed).count();
+                format!("  │  props: {}/{}", passed, result.verdicts.len())
+            };
+            println!(
+                "  {} seed 0x{:04X}  │  faults: {}  │  failures: {}  │  hash: {:016x}{}",
+                icon, seed, result.total_faults, result.total_failures, result.hash, props_str
+            );
+        }
+
+        // Record coverage for coverage strategy
+        if strategy == heisensim_fault::explorer::ExploreStrategy::Coverage {
+            explorer.record_coverage(fault_target_combos(&result.events));
+        }
+
+        all_results.push((seed, result));
+    }
+
+    let wall_time = start.elapsed();
+
+    if args.output == OutputFormat::Text {
+        println!();
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║  EXPLORE SUMMARY (deterministic)                             ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!(
+            "║  Seeds: {:4}  │  Interesting: {:4}  │  Wall time: {:.1}ms       ║",
+            all_results.len(),
+            interesting_seeds.len(),
+            wall_time.as_secs_f64() * 1000.0
+        );
+        println!("╚══════════════════════════════════════════════════════════════╝");
+
+        if !interesting_seeds.is_empty() {
+            println!();
+            println!("🐛 Interesting seeds:");
+            for &seed in &interesting_seeds {
+                println!(
+                    "  heisensim simulate --seed 0x{:04X} --duration {}",
+                    seed, args.duration
+                );
+            }
+        }
+
+        if args.explore_strategy == ExploreStrategyArg::Coverage {
+            println!("\n{}", explorer.coverage_summary());
+        }
+    }
+
+    if args.output == OutputFormat::Json {
+        let json_results: Vec<_> = all_results
+            .iter()
+            .map(|(seed, r)| {
+                serde_json::json!({
+                    "seed": seed,
+                    "seed_hex": format!("0x{:04X}", seed),
+                    "hash": format!("{:016x}", r.hash),
+                    "total_faults": r.total_faults,
+                    "total_failures": r.total_failures,
+                    "passed": r.verdicts.iter().all(|v| v.passed),
+                    "verdicts": r.verdicts,
+                })
+            })
+            .collect();
+        let output = serde_json::json!({
+            "seeds_tested": all_results.len(),
+            "interesting_seeds": interesting_seeds,
+            "all_passed": !any_prop_failures,
+            "wall_time_ms": wall_time.as_secs_f64() * 1000.0,
+            "results": json_results,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+
+    if any_prop_failures { Ok(1) } else { Ok(0) }
 }

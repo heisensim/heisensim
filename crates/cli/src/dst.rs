@@ -726,4 +726,23 @@ mod tests {
         let r2 = run(config).unwrap();
         assert_eq!(result.hash, r2.hash);
     }
+
+    #[test]
+    fn test_dst_unknown_fault_errors() {
+        let config = DstConfig {
+            seed: 42,
+            duration: VirtualTime::from_secs(60),
+            warmup: VirtualTime::from_secs(10),
+            faults: vec!["typo_fault".to_string()],
+            pod_count: 2,
+            probe_interval: VirtualTime::from_secs(5),
+            property_defs: Vec::new(),
+        };
+        let err = run(config).unwrap_err();
+        assert!(
+            err.to_string().contains("Unknown fault type"),
+            "Expected unknown fault error, got: {}",
+            err
+        );
+    }
 }
