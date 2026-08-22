@@ -186,3 +186,24 @@ pub fn evaluate_properties(
         Vec::new()
     }
 }
+
+/// Load and validate property definitions from a config file.
+///
+/// Reads the TOML file, parses `[[properties]]`, and validates all definitions
+/// by building a checker. Returns an error if the file can't be read, parsed,
+/// or contains invalid property definitions.
+pub fn load_and_validate(config_path: &std::path::Path) -> Result<Vec<PropertyDef>> {
+    let config_str = std::fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+    let config: PropertiesConfig = toml::from_str(&config_str)
+        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+
+    // Validate all property definitions eagerly
+    if !config.properties.is_empty() {
+        build_checker(&config.properties).with_context(|| {
+            format!("Invalid property in config file: {}", config_path.display())
+        })?;
+    }
+
+    Ok(config.properties)
+}
