@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-22
+
+### Added
+- **`heisensim diff`**: Compare two simulation seeds side-by-side — hash, faults, failures, timeline diff, property verdicts
+- **`explore --simulate --bisect`**: Binary search for the minimal failing seed
+- **`heisensim init --preset`**: Battle-tested config templates — `microservice`, `stateful`, `ci`
+- **GitHub Action**: `uses: heisensim/action@v1` for one-line CI integration
+- **GitLab CI template**: Reusable `include` template with configurable variables
+- Example CI configs for GitHub Actions and GitLab CI (`examples/ci/`)
+- `bisected_seeds` field in explore JSON output
+
+### Fixed
+- Preset property field names: `dns-resolution` uses `max_recovery_seconds`, `steady-state` includes `baseline_seconds`
+- JSON fault diff uses multiset comparison (order-independent)
+- Unicode-safe string truncation in diff output
+
 ## [0.9.0] - 2026-08-21
 
 ### Added
