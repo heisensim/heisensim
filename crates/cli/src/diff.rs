@@ -284,7 +284,9 @@ fn build_fault_diff(
     }
 
     let mut diffs = Vec::new();
-    for (t, (fa, fb)) in &times {
+    for (t, (mut fa, mut fb)) in times {
+        fa.sort();
+        fb.sort();
         if fa != fb {
             diffs.push(serde_json::json!({
                 "time_secs": t.as_secs(),
