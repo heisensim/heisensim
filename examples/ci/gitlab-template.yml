@@ -1,0 +1,78 @@
+# Heisensim GitLab CI Template
+# Include this in your .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/heisensim/heisensim/main/examples/ci/gitlab-template.yml'
+#
+#   chaos-test:
+#     extends: .heisensim-chaos-test
+#     variables:
+#       HEISENSIM_CONFIG: heisensim.toml
+#       HEISENSIM_SEEDS: "50"
+
+.heisensim-chaos-test:
+  stage: test
+  image: ghcr.io/heisensim/heisensim:v0.9.0
+  variables:
+    HEISENSIM_VERSION: "v0.9.0"
+    HEISENSIM_CONFIG: "heisensim.toml"
+    HEISENSIM_MODE: "explore"
+    HEISENSIM_SEED: "0x42"
+    HEISENSIM_SEEDS: "20"
+    HEISENSIM_DURATION: "5m"
+    HEISENSIM_FAULTS: ""
+    HEISENSIM_PROFILE: ""
+    HEISENSIM_BISECT: "false"
+  script:
+    - |
+      FAULT_FLAGS=""
+      if [ -n "$HEISENSIM_FAULTS" ]; then
+        FAULT_FLAGS="--faults $HEISENSIM_FAULTS"
+      fi
+      if [ -n "$HEISENSIM_PROFILE" ]; then
+        FAULT_FLAGS="--profile $HEISENSIM_PROFILE"
+      fi
+
+      CONFIG_FLAG=""
+      if [ -f "$HEISENSIM_CONFIG" ]; then
+        CONFIG_FLAG="--config $HEISENSIM_CONFIG"
+      fi
+
+      SIMULATE_EXIT=0
+      EXPLORE_EXIT=0
+
+      if [ "$HEISENSIM_MODE" = "simulate" ] || [ "$HEISENSIM_MODE" = "both" ]; then
+        echo "▶ heisensim simulate (seed: $HEISENSIM_SEED, duration: $HEISENSIM_DURATION)"
+        heisensim simulate \
+          --seed "$HEISENSIM_SEED" \
+          --duration "$HEISENSIM_DURATION" \
+          $CONFIG_FLAG \
+          $FAULT_FLAGS \
+          --output junit > chaos-results.xml || SIMULATE_EXIT=$?
+      fi
+
+      if [ "$HEISENSIM_MODE" = "explore" ] || [ "$HEISENSIM_MODE" = "both" ]; then
+        BISECT_FLAG=""
+        if [ "$HEISENSIM_BISECT" = "true" ]; then
+          BISECT_FLAG="--bisect"
+        fi
+
+        echo "▶ heisensim explore --simulate ($HEISENSIM_SEEDS seeds × $HEISENSIM_DURATION)"
+        heisensim explore \
+          --simulate \
+          --seeds "$HEISENSIM_SEEDS" \
+          --duration "$HEISENSIM_DURATION" \
+          $CONFIG_FLAG \
+          $FAULT_FLAGS \
+          $BISECT_FLAG || EXPLORE_EXIT=$?
+      fi
+
+      if [ "$SIMULATE_EXIT" -ne 0 ] || [ "$EXPLORE_EXIT" -ne 0 ]; then
+        echo "❌ Chaos tests detected SLA violations"
+        exit 1
+      fi
+  artifacts:
+    when: always
+    reports:
+      junit: chaos-results.xml
+    expire_in: 30 days
