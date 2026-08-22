@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] - 2026-08-19
+## [0.9.0] - 2026-08-21
 
 ### Added
 - **Deterministic Simulation Engine**: New `heisensim simulate` subcommand for shift-left chaos testing
@@ -15,18 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - VirtualNetwork integration for realistic probe routing
   - Timeline hash (xxh64) for determinism proof
   - `--time-scale` for watchable terminal output
+- **`explore --simulate`**: Run exploration against the DST engine — 20 seeds × 5min = 100 min of chaos in 68ms
+- **Config-driven simulation**: `heisensim simulate --config heisensim.toml` loads SLA properties
+- **Property evaluation in simulate**: Properties are checked and affect exit code (1 = SLA violation)
+- **JUnit/HTML output for simulate**: `--output junit` enables CI report integration
 - Generic `Timer<T>` in VirtualClock with priority-based ordering
 - `VirtualNetwork::new_seeded()` and `has_partition_between()` for deterministic network simulation
 - `VirtualTime::as_std_duration()` bridge method
+- `properties::load_and_validate()` shared config loading helper
 
 ### Changed
 - `ProcessTable` uses `BTreeMap` for deterministic iteration order
 - `VirtualNetwork` partitions use `BTreeSet` for deterministic behavior
 - `--mock` flag is now deprecated in favor of `heisensim simulate`
+- JSON seed output uses numeric `seed` + `seed_hex` display field
 
 ### Fixed  
 - Deterministic UUIDs (seeded RNG instead of OS entropy)
 - Deterministic timestamps (fixed epoch instead of wall clock)
+- TOML parse errors in `--config` now fail loudly instead of silently returning exit 0
 
 ## [0.7.0] - 2026-08-14
 
