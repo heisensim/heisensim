@@ -1,0 +1,33 @@
+# .github/workflows/chaos-test.yml
+# Add deterministic chaos testing to your CI pipeline
+name: Chaos Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  chaos-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install heisensim
+        run: |
+          curl -sSL https://github.com/heisensim/heisensim/releases/latest/download/heisensim-$(uname -m | sed 's/x86_64/x86_64-unknown-linux-gnu/' | sed 's/aarch64/aarch64-unknown-linux-gnu/').tar.gz | tar xz
+          sudo mv heisensim /usr/local/bin/
+
+      - name: Run deterministic chaos simulation
+        run: heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml --output junit > chaos-results.xml
+
+      - name: Explore 100 seeds
+        run: heisensim explore --simulate --seeds 100 --duration 5m --config heisensim.toml
+
+      - name: Upload test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Chaos Test Results
+          path: chaos-results.xml
+          reporter: java-junit
