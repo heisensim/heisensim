@@ -1,0 +1,53 @@
+# .github/workflows/chaos-test.yml
+# Add deterministic chaos testing to your CI pipeline
+name: Chaos Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  checks: write
+
+env:
+  HEISENSIM_VERSION: "v0.9.0"
+
+jobs:
+  chaos-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install heisensim
+        run: |
+          TARGET="x86_64-unknown-linux-gnu"
+          TARBALL="heisensim-${HEISENSIM_VERSION}-${TARGET}.tar.gz"
+          curl -sSL "https://github.com/heisensim/heisensim/releases/download/${HEISENSIM_VERSION}/${TARBALL}" -o "${TARBALL}"
+          curl -sSL "https://github.com/heisensim/heisensim/releases/download/${HEISENSIM_VERSION}/SHA256SUMS" -o SHA256SUMS
+          grep "${TARBALL}" SHA256SUMS | sha256sum -c -
+          tar xzf "${TARBALL}"
+          sudo mv heisensim /usr/local/bin/
+
+      - name: Run deterministic chaos simulation
+        id: simulate
+        run: heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml --output junit > chaos-results.xml
+        continue-on-error: true
+
+      - name: Explore 100 seeds
+        if: ${{ !cancelled() }}
+        id: explore
+        run: heisensim explore --simulate --seeds 100 --duration 5m --config heisensim.toml
+
+      - name: Upload test results
+        uses: dorny/test-reporter@v1
+        if: ${{ !cancelled() }}
+        with:
+          name: Chaos Test Results
+          path: chaos-results.xml
+          reporter: java-junit
+
+      - name: Fail if chaos tests failed
+        if: steps.simulate.outcome == 'failure' || steps.explore.outcome == 'failure'
+        run: exit 1

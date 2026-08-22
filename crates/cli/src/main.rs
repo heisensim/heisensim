@@ -14,6 +14,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod demo;
+pub mod diff;
 pub mod dst;
 mod metrics;
 mod mock;
@@ -60,11 +61,7 @@ enum Commands {
     Replay(ReplayArgs),
 
     /// Generate a starter heisensim.toml configuration file
-    Init {
-        /// Output path (default: heisensim.toml)
-        #[arg(short, long, default_value = "heisensim.toml")]
-        output: String,
-    },
+    Init(InitArgs),
 
     /// Validate a heisensim configuration file without running
     Validate(ValidateArgs),
@@ -92,6 +89,71 @@ enum Commands {
         #[arg(long, default_value = "30s")]
         duration: String,
     },
+
+    /// Compare two simulation runs side-by-side
+    Diff(DiffArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct DiffArgs {
+    /// First seed to compare
+    #[arg(long)]
+    pub seed_a: String,
+
+    /// Second seed to compare  
+    #[arg(long)]
+    pub seed_b: String,
+
+    /// Duration of each simulation
+    #[arg(long, default_value = "30s")]
+    pub duration: String,
+
+    /// Warmup period
+    #[arg(long, default_value = "10s")]
+    pub warmup: String,
+
+    /// Fault types
+    #[arg(
+        long,
+        default_value = "crash,latency,partition,stress,dns",
+        value_delimiter = ','
+    )]
+    pub faults: Vec<String>,
+
+    /// Fault profile
+    #[arg(long, value_enum, conflicts_with = "faults")]
+    pub profile: Option<FaultProfile>,
+
+    /// Config file for properties
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    /// Output format
+    #[arg(long, default_value = "text")]
+    pub output: OutputFormat,
+}
+
+#[derive(Args, Debug)]
+pub struct InitArgs {
+    /// Output path (default: heisensim.toml)
+    #[arg(short, long, default_value = "heisensim.toml")]
+    pub output: String,
+
+    /// Config preset template
+    #[arg(long, value_enum)]
+    pub preset: Option<InitPreset>,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum InitPreset {
+    /// Basic chaos testing config (default)
+    Basic,
+    /// Microservice mesh resilience testing
+    Microservice,
+    /// Stateful workload (database, queue) testing
+    Stateful,
+    /// CI-optimized quick smoke test
+    Ci,
 }
 
 #[derive(Args, Debug)]
@@ -466,8 +528,8 @@ async fn main() -> Result<()> {
             handle_replay(args).await?;
             0
         }
-        Commands::Init { output } => {
-            handle_init(&output).await?;
+        Commands::Init(args) => {
+            handle_init(args).await?;
             0
         }
         Commands::Validate(args) => {
@@ -488,6 +550,7 @@ async fn main() -> Result<()> {
             seed,
             duration,
         } => demo::run_demo(keep, seed, &duration).await?,
+        Commands::Diff(args) => crate::diff::handle_diff(args).await?,
     };
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
@@ -925,8 +988,13 @@ async fn handle_replay(args: ReplayArgs) -> Result<()> {
     Ok(())
 }
 
-async fn handle_init(output: &str) -> Result<()> {
-    let config = r#"# heisensim configuration
+async fn handle_init(args: InitArgs) -> Result<()> {
+    let preset = args.preset.unwrap_or(InitPreset::Basic);
+    let output = &args.output;
+
+    let (config, preset_name) = match preset {
+        InitPreset::Basic => (
+            r#"# heisensim configuration (basic preset)
 # Docs: https://heisensim.dev
 
 # Simulation duration
@@ -966,19 +1034,118 @@ min_percent = 99.0
 name = "low-latency"
 type = "latency_p99"
 max_ms = 500
+"#,
+            "basic",
+        ),
+        InitPreset::Microservice => (
+            r#"# heisensim configuration (microservice preset)
+# Tests resilience of a microservice mesh with API gateway and backend
 
-# [[properties]]
-# name = "stable-throughput"
-# type = "throughput"
-# window_seconds = 60
-# min_per_minute = 10
+duration = "5m"
+warmup = "15s"
+namespace = "default"
+faults = ["crash", "latency", "partition", "dns"]
 
-# [[properties]]
-# name = "returns-to-normal"
-# type = "steady-state"
-# max_recovery_seconds = 60
-# baseline_seconds = 30
-"#;
+[[probes]]
+name = "api-gateway"
+url = "http://api-gateway.default.svc:8080/health"
+interval = "1s"
+
+[[probes]]
+name = "backend-service"
+url = "http://backend-service.default.svc:8080/ready"
+interval = "2s"
+
+[[properties]]
+name = "high-availability"
+type = "availability"
+min_percent = 99.5
+
+[[properties]]
+name = "fast-recovery"
+type = "recovery_time"
+max_seconds = 30
+
+[[properties]]
+name = "low-latency"
+type = "latency_p99"
+max_ms = 500
+
+[[properties]]
+name = "prevent-cascading-failure"
+type = "no_cascade"
+
+[[properties]]
+name = "dns-resilience"
+type = "dns-resolution"
+max_recovery_seconds = 10
+"#,
+            "microservice",
+        ),
+        InitPreset::Stateful => (
+            r#"# heisensim configuration (stateful preset)
+# Tests resilience of stateful workloads like databases or message queues
+
+duration = "3m"
+warmup = "30s"
+namespace = "default"
+faults = ["crash", "eviction", "stress"]
+
+[[probes]]
+name = "database-primary"
+url = "http://database-primary.default.svc:9090/healthz"
+interval = "5s"
+
+[[properties]]
+name = "extreme-availability"
+type = "availability"
+min_percent = 99.9
+
+[[properties]]
+name = "recovery-time"
+type = "recovery_time"
+max_seconds = 60
+
+[[properties]]
+name = "error-budget"
+type = "error_budget"
+max_consecutive = 3
+
+[[properties]]
+name = "returns-to-normal"
+type = "steady-state"
+max_recovery_seconds = 60
+baseline_seconds = 30
+"#,
+            "stateful",
+        ),
+        InitPreset::Ci => (
+            r#"# heisensim configuration (CI preset)
+# Optimized for fast CI feedback
+
+duration = "1m"
+warmup = "5s"
+namespace = "default"
+faults = ["crash", "latency", "partition"]
+
+[[probes]]
+name = "my-service"
+url = "http://my-service.default.svc:8080/health"
+interval = "1s"
+
+[[properties]]
+name = "high-availability"
+type = "availability"
+min_percent = 99.0
+
+[[properties]]
+name = "fast-recovery"
+type = "recovery_time"
+max_seconds = 15
+"#,
+            "ci",
+        ),
+    };
 
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -999,9 +1166,22 @@ max_ms = 500
         })?;
     file.write_all(config.as_bytes())?;
 
-    println!("Created {} — edit it for your setup, then run:", output);
+    let preset_duration = match preset {
+        InitPreset::Basic => "30s",
+        InitPreset::Microservice => "5m",
+        InitPreset::Stateful => "3m",
+        InitPreset::Ci => "1m",
+    };
+
+    println!(
+        "Created {} ({} preset) — edit it for your setup, then run:",
+        output, preset_name
+    );
     println!("  heisensim validate --config {}", output);
-    println!("  heisensim run --config {}", output);
+    println!(
+        "  heisensim simulate --seed 0x42 --duration {} --config {}",
+        preset_duration, output
+    );
 
     Ok(())
 }
@@ -1344,9 +1524,6 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     }
 
     if args.simulate {
-        if args.bisect {
-            warn!("--bisect is not supported with --simulate and will be ignored");
-        }
         if args.parallel != 3 {
             warn!(
                 "--parallel is not used with --simulate (simulation is single-threaded and instant)"
@@ -1680,6 +1857,7 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
     let mut interesting_seeds: Vec<u64> = Vec::new();
     let mut all_results: Vec<(u64, crate::dst::DstResult)> = Vec::new();
     let mut any_prop_failures = false;
+    let mut last_known_good: Option<u64> = None;
 
     for _ in 0..args.seeds {
         let seed = explorer.next_seed();
@@ -1710,6 +1888,8 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
         }
         if has_failures || props_failed {
             interesting_seeds.push(seed);
+        } else {
+            last_known_good = Some(seed);
         }
 
         if args.output == OutputFormat::Text {
@@ -1738,6 +1918,70 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
         }
 
         all_results.push((seed, result));
+    }
+
+    let mut bisected_seeds: Vec<u64> = Vec::new();
+    if args.bisect && !interesting_seeds.is_empty() {
+        if args.output == OutputFormat::Text {
+            println!("\n🔍 Bisecting interesting seeds...");
+        }
+        for &failing_seed in &interesting_seeds {
+            let good_seed = last_known_good.unwrap_or(0);
+            if good_seed >= failing_seed {
+                bisected_seeds.push(failing_seed);
+                continue;
+            }
+
+            let mut low = good_seed;
+            let mut high = failing_seed;
+            let mut nearest_failing = failing_seed;
+
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let config = crate::dst::DstConfig {
+                    seed: mid,
+                    duration: heisensim_core::types::VirtualTime::from_millis(
+                        duration.as_millis() as u64
+                    ),
+                    warmup: heisensim_core::types::VirtualTime::from_millis(
+                        warmup.as_millis() as u64
+                    ),
+                    faults: resolved_faults.clone(),
+                    pod_count: 3,
+                    probe_interval: heisensim_core::types::VirtualTime::from_secs(5),
+                    property_defs: property_defs.clone(),
+                };
+                match crate::dst::run(config) {
+                    Ok(result) => {
+                        let fails =
+                            result.total_failures > 0 || result.verdicts.iter().any(|v| !v.passed);
+                        if fails {
+                            nearest_failing = mid;
+                            high = mid;
+                        } else {
+                            low = mid + 1;
+                        }
+                    }
+                    Err(_) => {
+                        high = mid;
+                    }
+                }
+            }
+
+            if args.output == OutputFormat::Text {
+                if nearest_failing != failing_seed {
+                    println!(
+                        "  Bisected seed 0x{:04X} → minimal failing seed: 0x{:04X}",
+                        failing_seed, nearest_failing
+                    );
+                } else {
+                    println!("  Seed 0x{:04X} is already minimal", failing_seed);
+                }
+            }
+            bisected_seeds.push(nearest_failing);
+        }
+        bisected_seeds.sort_unstable();
+        bisected_seeds.dedup();
     }
 
     let wall_time = start.elapsed();
@@ -1789,6 +2033,7 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
         let output = serde_json::json!({
             "seeds_tested": all_results.len(),
             "interesting_seeds": interesting_seeds,
+            "bisected_seeds": bisected_seeds,
             "all_passed": !any_prop_failures,
             "wall_time_ms": wall_time.as_secs_f64() * 1000.0,
             "results": json_results,

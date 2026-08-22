@@ -1,0 +1,13 @@
+# Add to .gitlab-ci.yml
+# Deterministic chaos testing — no cluster required
+chaos-test:
+  stage: test
+  image: ghcr.io/heisensim/heisensim:v0.9.0
+  script:
+    - heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml --output junit > chaos-results.xml || SIMULATE_FAILED=1
+    - heisensim explore --simulate --seeds 100 --duration 5m --config heisensim.toml || EXPLORE_FAILED=1
+    - if [ "$SIMULATE_FAILED" = "1" ] || [ "$EXPLORE_FAILED" = "1" ]; then exit 1; fi
+  artifacts:
+    when: always
+    reports:
+      junit: chaos-results.xml
