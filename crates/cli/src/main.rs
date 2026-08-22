@@ -1078,7 +1078,7 @@ type = "no_cascade"
 [[properties]]
 name = "dns-resilience"
 type = "dns-resolution"
-max_seconds = 10
+max_recovery_seconds = 10
 "#,
             "microservice",
         ),
@@ -1114,6 +1114,8 @@ max_consecutive = 3
 [[properties]]
 name = "returns-to-normal"
 type = "steady-state"
+max_recovery_seconds = 60
+baseline_seconds = 30
 "#,
             "stateful",
         ),
@@ -1164,14 +1166,21 @@ max_seconds = 15
         })?;
     file.write_all(config.as_bytes())?;
 
+    let preset_duration = match preset {
+        InitPreset::Basic => "30s",
+        InitPreset::Microservice => "5m",
+        InitPreset::Stateful => "3m",
+        InitPreset::Ci => "1m",
+    };
+
     println!(
         "Created {} ({} preset) — edit it for your setup, then run:",
         output, preset_name
     );
     println!("  heisensim validate --config {}", output);
     println!(
-        "  heisensim simulate --seed 0x42 --duration 5m --config {}",
-        output
+        "  heisensim simulate --seed 0x42 --duration {} --config {}",
+        preset_duration, output
     );
 
     Ok(())
@@ -1911,15 +1920,15 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
         all_results.push((seed, result));
     }
 
+    let mut bisected_seeds: Vec<u64> = Vec::new();
     if args.bisect && !interesting_seeds.is_empty() {
         if args.output == OutputFormat::Text {
             println!("\n🔍 Bisecting interesting seeds...");
         }
-        let mut new_interesting_seeds = Vec::new();
         for &failing_seed in &interesting_seeds {
             let good_seed = last_known_good.unwrap_or(0);
             if good_seed >= failing_seed {
-                new_interesting_seeds.push(failing_seed);
+                bisected_seeds.push(failing_seed);
                 continue;
             }
 
@@ -1969,13 +1978,10 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
                     println!("  Seed 0x{:04X} is already minimal", failing_seed);
                 }
             }
-            new_interesting_seeds.push(nearest_failing);
+            bisected_seeds.push(nearest_failing);
         }
-        interesting_seeds = new_interesting_seeds;
-
-        // Remove duplicates if any
-        interesting_seeds.sort_unstable();
-        interesting_seeds.dedup();
+        bisected_seeds.sort_unstable();
+        bisected_seeds.dedup();
     }
 
     let wall_time = start.elapsed();
@@ -2027,6 +2033,7 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
         let output = serde_json::json!({
             "seeds_tested": all_results.len(),
             "interesting_seeds": interesting_seeds,
+            "bisected_seeds": bisected_seeds,
             "all_passed": !any_prop_failures,
             "wall_time_ms": wall_time.as_secs_f64() * 1000.0,
             "results": json_results,
