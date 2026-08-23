@@ -12,7 +12,7 @@ permissions:
   checks: write
 
 env:
-  HEISENSIM_VERSION: "v0.9.0"
+  HEISENSIM_VERSION: "v0.10.0"
 
 jobs:
   chaos-test:
