@@ -1,41 +1,58 @@
-# heisensim demo recording
-# Generates demo.gif for the landing page and README
+# VHS tape for heisensim README hero recording
+# https://github.com/charmbracelet/vhs
+#
+# Prerequisites: heisensim on PATH, vhs installed
+# Record: vhs demo.tape
 
 Output demo.gif
+Output demo.webm
 
-Set Shell "zsh"
-Set FontSize 15
+Set Shell "bash"
+Set FontSize 14
 Set Width 960
-Set Height 540
+Set Height 600
+Set Padding 16
 Set Theme "Catppuccin Mocha"
-Set Padding 20
-Set TypingSpeed 30ms
+Set TypingSpeed 35ms
 
-# Work from a disposable temp dir to avoid stray files
-Type "cd $(mktemp -d) && clear"
+# Clean workspace + PATH setup
+Hide
+Type "cd $(mktemp -d) && export PATH=$HOME/.local/bin:$PATH && export PS1='$ '"
 Enter
 Sleep 500ms
+Show
 
-# Step 1: Show version
-Type "heisensim --version"
+# --- Scene 1: Init ---
+Type "# Generate a chaos testing config in one command"
 Enter
-Sleep 1s
+Sleep 800ms
+Type "heisensim init --preset microservice"
+Enter
+Sleep 2500ms
 
-# Step 2: Run with mock mode — short and punchy
-Type "# Chaos test — no cluster needed"
+# --- Scene 2: Simulate a single seed ---
+Type "# Simulate 5 minutes of chaos — deterministic, no cluster"
 Enter
-Sleep 300ms
-Type "heisensim run --mock --seed 42 --duration 30s --warmup 5s --faults network-delay,network-loss"
+Sleep 800ms
+Type "heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml"
+Enter
+Sleep 4500ms
+
+# --- Scene 3: Explore 20 seeds ---
+Type "# Explore 20 seeds at once — find every failure mode"
+Enter
+Sleep 800ms
+Type "heisensim explore --simulate --seeds 20 --duration 5m --config heisensim.toml"
+Enter
+Sleep 3500ms
+
+# --- Scene 4: Diff two seeds ---
+Type "# Compare two seeds side-by-side"
+Enter
+Sleep 800ms
+Type "heisensim diff --seed-a 0x01 --seed-b 0x02 --duration 5m --config heisensim.toml"
 Enter
 Sleep 4s
 
-# Step 3: Explore with coverage
-Type "# Find bugs faster with coverage-guided exploration"
-Enter
-Sleep 300ms
-Type "heisensim explore --mock --seeds 3 --explore-strategy coverage"
-Enter
-Sleep 6s
-
-# Final pause
+# Hold final frame
 Sleep 2s

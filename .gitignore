@@ -34,3 +34,4 @@ heisensim-out/
 *.log
 dumps/
 repro-*.json
+demo.webm
