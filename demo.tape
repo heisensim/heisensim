@@ -4,6 +4,8 @@
 # Prerequisites: heisensim on PATH, vhs installed
 # Record: vhs demo.tape
 
+Require heisensim
+
 Output demo.gif
 Output demo.webm
 
