@@ -59,27 +59,49 @@ cargo install heisensim
 
 Download from [GitHub Releases](https://github.com/heisensim/heisensim/releases) — available for Linux (x86_64, aarch64) and macOS (x86_64, Apple Silicon).
 
+### Docker
+
+```bash
+docker run ghcr.io/heisensim/heisensim:v0.10.0 simulate --seed 0x42 --duration 5m
+```
+
+### GitHub Action
+
+```yaml
+- uses: heisensim/action@v1
+  with:
+    config: heisensim.toml
+```
+
+See [heisensim/action](https://github.com/heisensim/action) for full docs.
+
 ---
 
 ## 🚀 Quick Start
 
+### No cluster required — simulate mode
+
 ```bash
+# 1. Generate a config
+heisensim init --preset microservice
+
+# 2. Run a deterministic simulation (completes in ~1ms)
+heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml
+
+# 3. Explore 20 seeds — find every failure mode
+heisensim explore --simulate --seeds 20 --duration 5m --config heisensim.toml
+```
+
+### With a Kubernetes cluster
+
+```bash
+# Full E2E demo with k3d
 git clone https://github.com/heisensim/heisensim.git
 cd heisensim/examples/k8s-demo
 make all   # creates k3d cluster → deploys app → runs chaos test
-```
 
-Or step by step:
-
-```bash
-# Single chaos test with property checking
-heisensim run --namespace heisensim-demo --seed 42 --duration 2m --config heisensim.toml
-
-# Explore 10 seeds in parallel
-heisensim explore --namespace heisensim-demo --seeds 10 --duration 30s --config heisensim.toml
-
-# Replay exact same run
-heisensim replay --seed 42 --namespace heisensim-demo --duration 2m
+# Or run against any namespace
+heisensim run --namespace my-app --seed 42 --duration 2m --config heisensim.toml
 ```
 
 > 📖 See the full [E2E demo guide](examples/k8s-demo/) for the complete walkthrough.
@@ -139,27 +161,35 @@ Properties produce verdicts with details:
 | `error_budget` | Max consecutive failures per probe | `max_consecutive` |
 | `no_cascade` | Faults don't cascade to unexpected probes | — |
 | `latency_p99` | Probe latency at percentile ≤ threshold | `max_ms` |
+| `dns_resolution` | DNS recovers within N seconds | `max_recovery_seconds` |
+| `steady_state` | System returns to steady state after fault | `max_recovery_seconds`, `baseline_seconds` |
+| `throughput` | Minimum requests per minute sustained | `min_per_minute`, `window_seconds` |
 
 ---
 
 ## ✨ Features
 
+- **Deterministic simulation engine (DST)** — runs entirely in-memory, no cluster required. Same seed = same hash.
 - **Auto-discovers K8s pods and health probes** — scrapes readiness/liveness probes from pod specs
-- **Injects faults** — pod crashes (`kubectl delete`), network latency (`tc netem`), partitions
+- **Injects faults** — pod crashes (`kubectl delete`), network latency (`tc netem`), partitions, DNS failures, stress
 - **Ephemeral container injection** — works with distroless images via `kubectl debug`
 - **Monitors health probes during faults** — HTTP, TCP, gRPC, exec probes
 - **Correlates faults to failures** — microsecond-precision event timeline
 - **OpenTelemetry correlation** — links fault spans to your application traces via `traceparent`
-- **Deterministic replay & simulation** — same seed = same faults = same results (`simulate` runs entirely in-memory)
-- **Property checking** — verify SLA invariants automatically
+- **Property checking** — verify SLA invariants automatically (8 built-in properties)
 - **Explore mode** — run many seeds in parallel to find interesting failures
-- **JSON output** — `--output json` for CI pipeline integration
+- **Seed bisection** — binary search for the minimal failing seed (`--bisect`)
+- **Seed diff** — compare two seeds side-by-side (`heisensim diff`)
+- **Init presets** — battle-tested configs for microservices, stateful workloads, and CI
+- **CI-native** — GitHub Action, GitLab CI template, JUnit XML, JSON output
 
 ---
 
 ## 💻 CLI Reference
 
 ### `heisensim run`
+
+Run a chaos test against a live Kubernetes cluster:
 
 ```bash
 heisensim run --namespace demo --seed 42 --duration 2m --config heisensim.toml
@@ -187,11 +217,14 @@ Same seed always produces the same timeline hash.
 # Basic simulation
 heisensim simulate --seed 0x42 --duration 5m
 
-# Watch events unfold at 100x speed
-heisensim simulate --seed 0x42 --duration 5m --time-scale 100x
+# With config-driven properties
+heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml
 
 # JSON output for CI pipelines
 heisensim simulate --seed 0x42 --duration 5m --output json
+
+# JUnit XML for test reporters
+heisensim simulate --seed 0x42 --duration 5m --output junit > results.xml
 
 # Custom fault mix and pod count
 heisensim simulate --seed 0x42 --duration 10m --faults crash,latency,partition --pods 5
@@ -204,30 +237,84 @@ heisensim simulate --seed 0x42 --duration 10m --faults crash,latency,partition -
 | `--warmup` | `30s` | Warmup period before faults begin |
 | `--faults` | all | Comma-separated fault types |
 | `--pods` | `3` | Number of simulated pods |
+| `--config` | — | TOML config with `[[properties]]` |
 | `--time-scale` | `instant` | Playback speed (`100x`, `10x`, `instant`) |
 | `--output` | `text` | Output format (`text`, `json`, `junit`, `html`) |
 | `--profile` | none | Fault preset (`standard`, `aggressive`) |
 
-> **Note:** The old `--mock` flag is deprecated in favor of `heisensim simulate`.
-
 ### `heisensim explore`
 
-Run many seeds in parallel to find bugs:
+Run many seeds to find bugs. Works in both live and simulate modes:
 
 ```bash
+# Simulate mode (no cluster required)
+heisensim explore --simulate --seeds 50 --duration 5m --config heisensim.toml
+
+# With seed bisection — find the minimal failing seed
+heisensim explore --simulate --seeds 100 --duration 5m --config heisensim.toml --bisect
+
+# Live K8s mode
 heisensim explore --namespace demo --seeds 50 --parallel 5 --duration 30s
 ```
 
+| Flag | Default | Description |
+|:---|:---|:---|
+| `--simulate` | — | Run in deterministic simulation mode |
+| `--seeds` | `10` | Number of seeds to explore |
+| `--duration` | `5m` | Duration per seed |
+| `--config` | — | TOML config with `[[properties]]` |
+| `--bisect` | — | Binary search for minimal failing seed |
+| `--parallel` | `5` | Parallel workers (live mode) |
+| `--output` | `text` | Output format (`text`, `json`) |
+
 ### `heisensim init`
 
-Auto-generate config from running cluster:
+Generate a config file with battle-tested defaults:
 
 ```bash
-heisensim init --namespace demo --output heisensim.toml
+# Default basic config
+heisensim init
 
-# Preview without writing
-heisensim init --namespace demo --dry-run
+# Microservice mesh preset (5 SLA properties, 4 fault types)
+heisensim init --preset microservice
+
+# Stateful workload preset (database/queue testing)
+heisensim init --preset stateful
+
+# CI-optimized quick smoke test
+heisensim init --preset ci
+
+# Auto-generate from running cluster
+heisensim init --namespace demo
 ```
+
+| Flag | Default | Description |
+|:---|:---|:---|
+| `--preset` | `basic` | Config template: `basic`, `microservice`, `stateful`, `ci` |
+| `--namespace` | — | Auto-discover probes from K8s namespace |
+| `--output` | `heisensim.toml` | Output file path |
+| `--dry-run` | — | Preview without writing |
+
+### `heisensim diff`
+
+Compare two simulation seeds side-by-side:
+
+```bash
+# Compare seeds
+heisensim diff --seed-a 0x01 --seed-b 0x02 --duration 5m --config heisensim.toml
+
+# JSON output
+heisensim diff --seed-a 0x01 --seed-b 0x02 --duration 5m --output json
+```
+
+| Flag | Default | Description |
+|:---|:---|:---|
+| `--seed-a` | required | First seed |
+| `--seed-b` | required | Second seed |
+| `--duration` | `5m` | Simulation duration |
+| `--config` | — | TOML config with `[[properties]]` |
+| `--faults` | all | Comma-separated fault types |
+| `--output` | `text` | Output format (`text`, `json`) |
 
 ### `heisensim replay`
 
@@ -236,6 +323,34 @@ Re-run a previous test with identical fault sequence:
 ```bash
 heisensim replay --seed 42 --namespace demo
 ```
+
+---
+
+## 🔌 CI Integration
+
+### GitHub Actions
+
+```yaml
+- uses: heisensim/action@v1
+  with:
+    config: heisensim.toml
+    seeds: '50'
+    bisect: 'true'
+```
+
+### GitLab CI
+
+```yaml
+include:
+  - remote: 'https://raw.githubusercontent.com/heisensim/heisensim/main/examples/ci/gitlab-template.yml'
+
+chaos-test:
+  extends: .heisensim-chaos-test
+  variables:
+    HEISENSIM_CONFIG: heisensim.toml
+```
+
+See [`examples/ci/`](examples/ci/) for copy-paste configs.
 
 ---
 
@@ -248,9 +363,9 @@ heisensim/
 │   ├── timeline/    # Microsecond event bus & correlation
 │   ├── probe/       # Async probe runners (HTTP, TCP, gRPC, exec)
 │   ├── k8s/         # K8s client, discovery & fault operators
-│   ├── fault/       # Fault scheduling & PRNG
-│   ├── props/       # Property checking (5 timeline-aware invariants)
-│   ├── core/        # Core types & config
+│   ├── fault/       # Fault scheduling, PRNG & DST engine
+│   ├── props/       # Property checking (8 timeline-aware invariants)
+│   ├── core/        # Core types, config & virtual clock
 │   └── intercept/   # (Future: syscall interception)
 ```
 
@@ -260,22 +375,23 @@ heisensim/
 
 | Feature | heisensim | Chaos Monkey | Litmus | Chaos Mesh | Gremlin |
 | :--- | :---: | :---: | :---: | :---: | :---: |
+| **No Cluster Required** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **SLA Property Checking** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Deterministic Replay** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Seed Bisection & Diff** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Auto-Discovery & Probing** | ✅ | ❌ | ⚠️ | ⚠️ | ❌ |
 | **Zero-CRD CLI** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Fault↔Failure Correlation** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **GitHub Action / GitLab CI** | ✅ | ❌ | ❌ | ❌ | ⚠️ |
 | **Open Source** | ✅ | ✅ | ✅ | ✅ | ❌ |
 
 ---
 
 ## 🗺️ Roadmap
 
-- **Phase 1 ✅**: K8s fault injection, auto-discovery, timeline correlation, deterministic replay
-- **Phase 2 ✅**: Property checking, explore mode, ephemeral container injection, gRPC probes
-- **Phase 2.5 ✅**: OpenTelemetry correlation, JSON output, CI pipeline support, crates.io publish
-- **Phase 3 🔜**: GitHub Action (`uses: heisensim/action@v1`), docs site, eBPF network partitions
-- **Phase 4 📋**: Process-level determinism (seccomp-BPF / ptrace) [Virtual clock partially complete]
+- **v0.10.0 ✅**: DST engine, property checking, seed bisection & diff, init presets, GitHub Action, GitLab CI template, VHS demo
+- **Next**: docs site (mdbook), Grafana observability dashboard, Diverge integration (preview env chaos testing)
+- **Future**: Process-level determinism via vDSO trampoline — the deep moat
 
 ---
 
