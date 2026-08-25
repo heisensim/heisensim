@@ -68,6 +68,7 @@ docker run ghcr.io/heisensim/heisensim:v0.10.0 simulate --seed 0x42 --duration 5
 ### GitHub Action
 
 ```yaml
+- uses: actions/checkout@v4
 - uses: heisensim/action@v1
   with:
     config: heisensim.toml
@@ -331,6 +332,7 @@ heisensim replay --seed 42 --namespace demo
 ### GitHub Actions
 
 ```yaml
+- uses: actions/checkout@v4
 - uses: heisensim/action@v1
   with:
     config: heisensim.toml
