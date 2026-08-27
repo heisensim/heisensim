@@ -102,8 +102,16 @@ fn revert_injection(pid: u32) -> Result<()> {
         serde_json::from_str(&input)
             .map_err(|e| anyhow::anyhow!("failed to parse injection handle: {}", e))?;
 
-    // Override PID in case the process restarted with a new PID
-    handle.pid = pid;
+    // Validate that the handle's PID matches the CLI PID to prevent
+    // accidentally reverting in the wrong process's memory space
+    if handle.pid != pid {
+        anyhow::bail!(
+            "PID mismatch: handle was created for PID {} but --pid {} was specified. \
+             Refusing to write to wrong process memory.",
+            handle.pid,
+            pid
+        );
+    }
 
     tracing::info!(
         pid,

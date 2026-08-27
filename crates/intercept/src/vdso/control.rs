@@ -257,4 +257,51 @@ mod tests {
         assert!(parse_speed("0x").is_err());
         assert!(parse_speed("-1x").is_err());
     }
+
+    #[test]
+    fn test_injection_handle_serde_roundtrip() {
+        let handle = InjectionHandle {
+            pid: 42,
+            shm_addr: 0x7fff_dead_beef,
+            payload_addr: 0x7fff_cafe_babe,
+            original_bytes: vec![0x0f, 0x05, 0x48, 0x89, 0xc3, 0xc3],
+            trampoline_addr: 0x7fff_1234_5678,
+            allocated_size: 4096,
+            allocated_addr: 0x7fff_0000_0000,
+        };
+
+        let json = serde_json::to_string(&handle).unwrap();
+        let restored: InjectionHandle = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.pid, 42);
+        assert_eq!(restored.shm_addr, 0x7fff_dead_beef);
+        assert_eq!(restored.payload_addr, 0x7fff_cafe_babe);
+        assert_eq!(
+            restored.original_bytes,
+            vec![0x0f, 0x05, 0x48, 0x89, 0xc3, 0xc3]
+        );
+        assert_eq!(restored.trampoline_addr, 0x7fff_1234_5678);
+        assert_eq!(restored.allocated_size, 4096);
+        assert_eq!(restored.allocated_addr, 0x7fff_0000_0000);
+    }
+
+    #[test]
+    fn test_injection_handle_preserves_original_bytes() {
+        // Ensure original_bytes survives serialization — critical for revert
+        let original = vec![0xcc; 64]; // 64 bytes of int3 breakpoints
+        let handle = InjectionHandle {
+            pid: 1,
+            shm_addr: 0,
+            payload_addr: 0,
+            original_bytes: original.clone(),
+            trampoline_addr: 0,
+            allocated_size: 0,
+            allocated_addr: 0,
+        };
+
+        let json = serde_json::to_string(&handle).unwrap();
+        let restored: InjectionHandle = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.original_bytes, original);
+        assert_eq!(restored.original_bytes.len(), 64);
+    }
 }

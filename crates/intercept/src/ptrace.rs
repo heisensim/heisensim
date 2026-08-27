@@ -59,10 +59,23 @@ impl PtraceTracer {
                     break;
                 }
                 WaitStatus::Stopped(_, sig) => {
-                    // Signal-delivery stop — forward the signal and continue
+                    // Signal-delivery stop — forward the signal and let the
+                    // loop's next iteration pick up the resulting stop.
+                    // We do NOT call waitpid here; the next ptrace::syscall +
+                    // waitpid at the top of the loop handles it correctly.
                     ptrace::syscall(pid, Some(sig))?;
-                    waitpid(pid, None)?;
-                    continue;
+                    // Skip the ptrace::syscall(None) at the top of the next
+                    // iteration — we already resumed. Go directly to waitpid.
+                    match waitpid(pid, None)? {
+                        WaitStatus::PtraceSyscall(_) => break,
+                        WaitStatus::Signaled(_, sig, _) => {
+                            anyhow::bail!("traced process killed by signal {:?}", sig);
+                        }
+                        WaitStatus::Exited(_, code) => {
+                            anyhow::bail!("traced process exited with code {}", code);
+                        }
+                        _ => continue,
+                    }
                 }
                 WaitStatus::Signaled(_, sig, _) => {
                     anyhow::bail!("traced process killed by signal {:?}", sig);
@@ -204,6 +217,65 @@ mod tests {
     #[test]
     fn test_new_tracer() {
         let tracer = PtraceTracer::new();
+        assert!(tracer.pid.is_none());
+    }
+
+    #[test]
+    fn test_detach_without_attach_is_ok() {
+        let mut tracer = PtraceTracer::new();
+        // Detaching when nothing is attached should succeed silently
+        assert!(tracer.detach().is_ok());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_trace_process_non_linux_errors() {
+        let mut tracer = PtraceTracer::new();
+        let result = tracer.trace_process(Pid::from_raw(1));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only supported on Linux")
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_wait_for_syscall_non_linux_errors() {
+        let mut tracer = PtraceTracer::new();
+        let result = tracer.wait_for_syscall();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only supported on Linux")
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_set_result_non_linux_errors() {
+        let mut tracer = PtraceTracer::new();
+        let result = tracer.set_result(SyscallResult::Allow);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only supported on Linux")
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_detach_non_linux_clears_pid() {
+        let mut tracer = PtraceTracer::new();
+        // Manually set pid to simulate an attached state
+        tracer.pid = Some(Pid::from_raw(42));
+        assert!(tracer.detach().is_ok());
         assert!(tracer.pid.is_none());
     }
 }
