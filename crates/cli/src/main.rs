@@ -924,7 +924,8 @@ async fn handle_run(
     let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
-        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
         properties::resolve_with_template(
             args.property_template.as_ref(),
             &config.properties,
@@ -1661,7 +1662,8 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
-        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
         properties::resolve_with_template(
             args.property_template.as_ref(),
             &config.properties,
@@ -1931,7 +1933,8 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
     let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
-        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
         properties::resolve_with_template(
             args.property_template.as_ref(),
             &config.properties,

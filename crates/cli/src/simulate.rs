@@ -70,7 +70,7 @@ pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
             let config_str =
                 std::fs::read_to_string(config_path).context("Failed to read config file")?;
             let config: crate::properties::PropertiesConfig =
-                toml::from_str(&config_str).unwrap_or_default();
+                toml::from_str(&config_str).context("Failed to parse properties config")?;
             crate::properties::resolve_with_template(
                 args.property_template.as_ref(),
                 &config.properties,
