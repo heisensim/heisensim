@@ -1,6 +1,6 @@
 [package]
 name = "heisensim-intercept"
-description = "Syscall interception layer for heisensim (seccomp-BPF, ptrace)"
+description = "Syscall interception layer for heisensim (vDSO trampoline, ptrace, seccomp-BPF)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,8 @@ nix.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+goblin = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+memmap2 = "0.9"
