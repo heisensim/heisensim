@@ -76,8 +76,9 @@ impl TimeControl {
 
     /// Deserialize from bytes read from shared memory.
     pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
-        // SAFETY: TimeControl is repr(C) with no padding issues
-        unsafe { std::ptr::read(bytes.as_ptr() as *const Self) }
+        // SAFETY: TimeControl is repr(C), and read_unaligned handles
+        // potentially unaligned source buffers from shared memory.
+        unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
     }
 }
 
