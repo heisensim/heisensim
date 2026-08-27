@@ -42,7 +42,6 @@ impl PtraceTracer {
     pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
         use nix::sys::{
             ptrace,
-            signal::Signal,
             wait::{WaitStatus, waitpid},
         };
 
