@@ -17,6 +17,7 @@ pub mod handler;
 pub mod ptrace;
 pub mod seccomp;
 pub mod syscall;
+pub mod tracer;
 
 /// vDSO trampoline injection for deterministic time control.
 /// Full injection only available on Linux; types and parsers are cross-platform.

@@ -26,7 +26,10 @@ impl PtraceTracer {
         ptrace::attach(pid)?;
         waitpid(pid, None)?;
         // Set TRACESYSGOOD so we can distinguish syscall stops from signal stops
-        ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD)?;
+        ptrace::setoptions(
+            pid,
+            ptrace::Options::PTRACE_O_TRACESYSGOOD | ptrace::Options::PTRACE_O_EXITKILL,
+        )?;
         self.pid = Some(pid);
         Ok(())
     }
@@ -141,7 +144,34 @@ impl PtraceTracer {
     pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
         anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
     }
+}
 
+/// Wait for syscall-exit stop, forwarding any intervening signals.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn wait_for_syscall_exit(pid: Pid) -> Result<()> {
+    use nix::sys::{
+        ptrace,
+        wait::{WaitStatus, waitpid},
+    };
+    loop {
+        match waitpid(pid, None)? {
+            WaitStatus::PtraceSyscall(_) => return Ok(()),
+            WaitStatus::Stopped(_, sig) => {
+                // Forward the signal and continue waiting
+                ptrace::syscall(pid, Some(sig))?;
+            }
+            WaitStatus::Signaled(_, sig, _) => {
+                anyhow::bail!("traced process killed by signal {:?}", sig);
+            }
+            WaitStatus::Exited(_, code) => {
+                anyhow::bail!("traced process exited with code {}", code);
+            }
+            _ => continue,
+        }
+    }
+}
+
+impl PtraceTracer {
     /// Inject the result of a syscall back into the process, modifying registers if needed.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub fn set_result(&mut self, result: SyscallResult) -> Result<()> {
@@ -155,12 +185,12 @@ impl PtraceTracer {
             SyscallResult::Allow => {
                 // Let the syscall proceed normally — resume to exit
                 ptrace::syscall(pid, None)?;
-                nix::sys::wait::waitpid(pid, None)?;
+                wait_for_syscall_exit(pid)?;
             }
             SyscallResult::Replace(value) => {
                 // Skip to syscall exit, then override RAX with our value
                 ptrace::syscall(pid, None)?;
-                nix::sys::wait::waitpid(pid, None)?;
+                wait_for_syscall_exit(pid)?;
                 let mut regs = ptrace::getregs(pid)?;
                 regs.rax = value as u64;
                 ptrace::setregs(pid, regs)?;
@@ -172,7 +202,7 @@ impl PtraceTracer {
                 regs.orig_rax = u64::MAX; // -1: invalid syscall
                 ptrace::setregs(pid, regs)?;
                 ptrace::syscall(pid, None)?;
-                nix::sys::wait::waitpid(pid, None)?;
+                wait_for_syscall_exit(pid)?;
                 let mut regs = ptrace::getregs(pid)?;
                 regs.rax = (-errno as i64) as u64;
                 ptrace::setregs(pid, regs)?;
@@ -180,7 +210,7 @@ impl PtraceTracer {
             SyscallResult::Redirect => {
                 // Redirect is not yet implemented — treat as allow
                 ptrace::syscall(pid, None)?;
-                nix::sys::wait::waitpid(pid, None)?;
+                wait_for_syscall_exit(pid)?;
             }
         }
 
