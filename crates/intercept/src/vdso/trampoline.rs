@@ -317,7 +317,7 @@ mod tests {
         let payload = generate_x86_64_payload(
             0x7f00_0000_0000, // shm_addr
             0x7f00_0001_0000, // original_bytes_addr
-            0x7f00_0002_000C, // original_fn_continue_addr
+            0x7f00_0002_000c, // original_fn_continue_addr
             0x7f00_0003_0000, // base_time_addr
         );
 

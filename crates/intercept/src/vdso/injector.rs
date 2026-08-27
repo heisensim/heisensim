@@ -35,8 +35,6 @@ pub struct InjectionConfig {
 #[cfg(target_os = "linux")]
 pub fn inject(config: &InjectionConfig) -> Result<InjectionHandle> {
     use super::{elf, maps, trampoline};
-    use std::fs::OpenOptions;
-    use std::io::{Read, Seek, SeekFrom, Write};
 
     let pid = config.pid;
     info!(pid, "starting vDSO injection");

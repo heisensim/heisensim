@@ -31,7 +31,7 @@ const CLOCK_GETTIME_SYMBOLS: &[&str] = &[
 /// The `vdso_bytes` must be the raw memory contents read from the vDSO mapping.
 /// The `mapping_base` is the virtual address where the vDSO is mapped (from /proc/pid/maps).
 #[cfg(target_os = "linux")]
-pub fn find_clock_gettime(vdso_bytes: &[u8], mapping_base: u64) -> Result<VdsoSymbol> {
+pub fn find_clock_gettime(vdso_bytes: &[u8], _mapping_base: u64) -> Result<VdsoSymbol> {
     use goblin::elf::Elf;
 
     let elf = Elf::parse(vdso_bytes).context("failed to parse vDSO as ELF")?;
