@@ -100,6 +100,15 @@ fn run_fault_injection(
 
     let duration = parse_duration(duration_str)?;
 
+    // Validate errno: Linux syscalls signal errors via -errno in RAX.
+    // Values outside 1..=4095 would produce non-error results.
+    if matches!(fault, FaultMode::ConnectError) && !(1..=4095).contains(&errno) {
+        anyhow::bail!(
+            "invalid errno {}: must be in range 1..=4095 (e.g. 111 for ECONNREFUSED)",
+            errno
+        );
+    }
+
     let config = match fault {
         FaultMode::ConnectError => NetworkFaultConfig {
             connect_error: Some(errno),
