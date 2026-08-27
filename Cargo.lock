@@ -898,6 +898,7 @@ dependencies = [
  "libc",
  "memmap2",
  "nix",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tracing",

@@ -102,7 +102,8 @@ impl fmt::Display for TimeControl {
 /// Handle to an injection's shared memory segment.
 ///
 /// Holds the original vDSO bytes so we can restore them on revert.
-#[derive(Debug)]
+/// Serializable so it can be persisted and passed to the revert flow.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InjectionHandle {
     /// PID of the target process.
     pub pid: u32,

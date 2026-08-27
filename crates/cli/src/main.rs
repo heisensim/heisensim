@@ -839,7 +839,14 @@ async fn handle_run(
             }
             "time-warp" => {
                 info!("⏰ Injecting time warp on {}", target.name);
-                // Time warp uses vDSO trampoline via ephemeral container
+                // Time warp uses vDSO trampoline via ephemeral container.
+                // --target shares the PID namespace with the workload container.
+                let target_container = target
+                    .container_names
+                    .first()
+                    .map(|c| c.as_str())
+                    .unwrap_or(&target.name);
+                let target_flag = format!("--target={}", target_container);
                 let mut cmd = tokio::process::Command::new("kubectl");
                 cmd.args([
                     "debug",
@@ -848,7 +855,7 @@ async fn handle_run(
                     &target.name,
                     "--image=ghcr.io/heisensim/heisensim:latest",
                     "--container=heisensim-timewarp",
-                    "--target=",
+                    &target_flag,
                     "--",
                     "heisensim-inject",
                     "--pid",
@@ -2150,7 +2157,11 @@ async fn handle_time_warp(args: TimeWarpArgs) -> Result<()> {
     info!("   Command: {}", inject_cmd);
 
     // Use kubectl debug to inject an ephemeral container
-    let container_name = args.container.as_deref().unwrap_or("heisensim-timewarp");
+    let container_name = "heisensim-timewarp";
+    // --target shares PID namespace with the workload container
+    let target_container = args.container.as_deref().unwrap_or(&args.pod);
+    let target_flag = format!("--target={}", target_container);
+    let container_flag = format!("--container={}", container_name);
     let mut cmd = tokio::process::Command::new("kubectl");
     cmd.args([
         "debug",
@@ -2158,8 +2169,8 @@ async fn handle_time_warp(args: TimeWarpArgs) -> Result<()> {
         &args.namespace,
         &args.pod,
         "--image=ghcr.io/heisensim/heisensim:latest",
-        &format!("--container={}", container_name),
-        "--target=", // Share PID namespace with first container
+        &container_flag,
+        &target_flag,
         "--",
         "heisensim-inject",
         "--pid",

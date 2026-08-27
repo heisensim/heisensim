@@ -25,6 +25,8 @@ impl PtraceTracer {
 
         ptrace::attach(pid)?;
         waitpid(pid, None)?;
+        // Set TRACESYSGOOD so we can distinguish syscall stops from signal stops
+        ptrace::setoptions(pid, ptrace::Options::PTRACE_O_TRACESYSGOOD)?;
         self.pid = Some(pid);
         Ok(())
     }
@@ -38,15 +40,44 @@ impl PtraceTracer {
     /// Wait for the target process to enter a syscall, and return the parsed syscall.
     #[cfg(target_os = "linux")]
     pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
-        use nix::sys::{ptrace, wait::waitpid};
+        use nix::sys::{
+            ptrace,
+            signal::Signal,
+            wait::{WaitStatus, waitpid},
+        };
 
         let pid = self
             .pid
             .ok_or_else(|| anyhow::anyhow!("no process attached"))?;
 
-        // Resume until next syscall entry
-        ptrace::syscall(pid, None)?;
-        waitpid(pid, None)?;
+        loop {
+            // Resume until next syscall entry
+            ptrace::syscall(pid, None)?;
+
+            match waitpid(pid, None)? {
+                WaitStatus::PtraceSyscall(_) => {
+                    // This is a syscall stop — read registers
+                    break;
+                }
+                WaitStatus::Stopped(_, sig) => {
+                    // Signal-delivery stop — forward the signal and continue
+                    ptrace::syscall(pid, Some(sig))?;
+                    waitpid(pid, None)?;
+                    continue;
+                }
+                WaitStatus::Signaled(_, sig, _) => {
+                    anyhow::bail!("traced process killed by signal {:?}", sig);
+                }
+                WaitStatus::Exited(_, code) => {
+                    anyhow::bail!("traced process exited with code {}", code);
+                }
+                status => {
+                    // Other statuses (continued, etc.) — retry
+                    tracing::debug!(?status, "unexpected wait status, retrying");
+                    continue;
+                }
+            }
+        }
 
         // Read registers to determine which syscall
         let regs = ptrace::getregs(pid)?;
@@ -68,13 +99,10 @@ impl PtraceTracer {
                 sock_type: regs.rsi as i32,
                 protocol: regs.rdx as i32,
             },
-            42 => {
-                // For connect, we'd need to read the sockaddr from memory
-                InterceptedSyscall::Connect {
-                    fd: regs.rdi as i32,
-                    addr: vec![],
-                }
-            }
+            42 => InterceptedSyscall::Connect {
+                fd: regs.rdi as i32,
+                addr: vec![],
+            },
             44 => InterceptedSyscall::Send {
                 fd: regs.rdi as i32,
                 len: regs.rdx as usize,
