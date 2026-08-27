@@ -45,6 +45,10 @@ pub struct SimulateArgs {
     /// Path to heisensim.toml config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    property_template: Option<crate::properties::PropertyTemplate>,
 }
 
 pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
@@ -65,6 +69,16 @@ pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
         crate::properties::load_and_validate(config_path)?
     } else {
         Vec::new()
+    };
+    // Merge CLI template flag with config-file properties
+    let property_defs = if args.property_template.is_some() {
+        crate::properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &property_defs,
+            None,
+        )
+    } else {
+        property_defs
     };
 
     let config = DstConfig {

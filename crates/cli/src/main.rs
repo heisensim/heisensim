@@ -134,6 +134,10 @@ pub struct DiffArgs {
     /// Output format
     #[arg(long, default_value = "text")]
     pub output: OutputFormat,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    pub property_template: Option<properties::PropertyTemplate>,
 }
 
 #[derive(Args, Debug)]
@@ -243,6 +247,10 @@ struct RunArgs {
     /// Fault profile preset. Overrides --faults when set.
     #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    property_template: Option<properties::PropertyTemplate>,
 }
 
 /// Fault profile presets.
@@ -435,6 +443,10 @@ struct ExploreArgs {
     /// Fault profile preset. Overrides --faults when set.
     #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    property_template: Option<properties::PropertyTemplate>,
 }
 
 #[derive(Args, Debug)]
@@ -1641,7 +1653,13 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
         let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
-        config.properties
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
     } else {
         Vec::new()
     };
@@ -1905,6 +1923,11 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
         properties::load_and_validate(config_path)?
     } else {
         Vec::new()
+    };
+    let property_defs = if args.property_template.is_some() {
+        properties::resolve_with_template(args.property_template.as_ref(), &property_defs, None)
+    } else {
+        property_defs
     };
 
     if args.output == OutputFormat::Text {

@@ -17,6 +17,15 @@ pub async fn handle_diff(args: DiffArgs) -> Result<i32> {
     } else {
         Vec::new()
     };
+    let property_defs = if args.property_template.is_some() {
+        crate::properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &property_defs,
+            None,
+        )
+    } else {
+        property_defs
+    };
 
     let config_a = crate::dst::DstConfig {
         seed: seed_a,
