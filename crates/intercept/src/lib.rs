@@ -1,28 +1,25 @@
 //! # heisensim-intercept
 //!
-//! Syscall interception layer for heisensim. Provides the ability to intercept
-//! and replace non-deterministic syscalls (time, network, randomness, I/O)
-//! in target processes using Linux ptrace and seccomp-BPF.
+//! Syscall interception layer for heisensim. Provides two mechanisms:
 //!
-//! ## Architecture
+//! ## vDSO Trampoline (primary)
 //!
-//! The interceptor acts as a supervisor process that traces target processes.
-//! When a target makes a syscall that would introduce non-determinism, the
-//! interceptor catches it and returns a controlled, deterministic result.
+//! Patches the Linux vDSO `clock_gettime` in a running process to intercept
+//! time queries and return controlled values. Enables time offset and speed
+//! manipulation without restarting the target. See [`vdso`] module.
 //!
-//! ### Intercepted Syscalls
+//! ## ptrace + seccomp (planned)
 //!
-//! | Category    | Syscalls                                          |
-//! |-------------|---------------------------------------------------|
-//! | Time        | clock_gettime, gettimeofday, nanosleep             |
-//! | Network     | socket, connect, send, recv, accept, bind, epoll_* |
-//! | Randomness  | getrandom, /dev/urandom reads                     |
-//! | Process     | fork, clone, execve                                |
-//! | Filesystem  | open, read, write, fsync                           |
+//! Traditional syscall interception for non-time syscalls (network, randomness).
+//! See [`ptrace`] and [`seccomp`] modules.
 
 pub mod handler;
 pub mod ptrace;
 pub mod seccomp;
 pub mod syscall;
+
+/// vDSO trampoline injection for deterministic time control.
+/// Full injection only available on Linux; types and parsers are cross-platform.
+pub mod vdso;
 
 pub use handler::SyscallHandler;
