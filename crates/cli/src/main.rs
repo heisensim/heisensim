@@ -921,22 +921,31 @@ async fn handle_run(
     // Property checking
     let mut exit_code = 0;
     let mut verdicts = Vec::new();
-    if let Some(ref config_path) = args.config {
+    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
         let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
-        if !config.properties.is_empty() {
-            info!("Evaluating {} properties...", config.properties.len());
-            let checker = properties::build_checker(&config.properties)?;
-            verdicts = checker.evaluate_all(&final_events);
-            let all_passed = verdicts.iter().all(|v| v.passed);
-            if args.output == OutputFormat::Text {
-                properties::print_verdicts(&verdicts);
-            }
-            if !all_passed {
-                warn!("Some properties FAILED. Exit code 1.");
-                exit_code = 1;
-            }
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
+    } else {
+        Vec::new()
+    };
+    if !property_defs.is_empty() {
+        info!("Evaluating {} properties...", property_defs.len());
+        let checker = properties::build_checker(&property_defs)?;
+        verdicts = checker.evaluate_all(&final_events);
+        let all_passed = verdicts.iter().all(|v| v.passed);
+        if args.output == OutputFormat::Text {
+            properties::print_verdicts(&verdicts);
+        }
+        if !all_passed {
+            warn!("Some properties FAILED. Exit code 1.");
+            exit_code = 1;
         }
     }
 
@@ -1919,15 +1928,19 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
     let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
 
     // Load and validate property definitions
-    let property_defs = if let Some(ref config_path) = args.config {
-        properties::load_and_validate(config_path)?
+    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
     } else {
         Vec::new()
-    };
-    let property_defs = if args.property_template.is_some() {
-        properties::resolve_with_template(args.property_template.as_ref(), &property_defs, None)
-    } else {
-        property_defs
     };
 
     if args.output == OutputFormat::Text {

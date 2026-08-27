@@ -359,29 +359,6 @@ pub fn evaluate_properties(
     }
 }
 
-/// Load and validate property definitions from a config file.
-///
-/// Reads the TOML file, parses `[[properties]]` and optional `template`,
-/// and validates all definitions by building a checker. Explicit `[[properties]]`
-/// override template properties with the same name.
-pub fn load_and_validate(config_path: &std::path::Path) -> Result<Vec<PropertyDef>> {
-    let config_str = std::fs::read_to_string(config_path)
-        .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
-    let config: PropertiesConfig = toml::from_str(&config_str)
-        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
-
-    let defs = merge_template_and_explicit(config.template.as_ref(), &config.properties);
-
-    // Validate all property definitions eagerly
-    if !defs.is_empty() {
-        build_checker(&defs).with_context(|| {
-            format!("Invalid property in config file: {}", config_path.display())
-        })?;
-    }
-
-    Ok(defs)
-}
-
 /// Resolve property definitions from a CLI template flag and/or config file.
 ///
 /// CLI `--property-template` overrides config file `template`.
