@@ -836,6 +836,7 @@ dependencies = [
  "clap",
  "heisensim-core",
  "heisensim-fault",
+ "heisensim-intercept",
  "heisensim-k8s",
  "heisensim-probe",
  "heisensim-props",
@@ -891,13 +892,17 @@ name = "heisensim-intercept"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "clap",
  "goblin",
  "heisensim-core",
  "libc",
  "memmap2",
  "nix",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

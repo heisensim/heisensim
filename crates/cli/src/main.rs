@@ -92,6 +92,9 @@ enum Commands {
 
     /// Compare two simulation runs side-by-side
     Diff(DiffArgs),
+
+    /// Manipulate time in a running pod via vDSO trampoline (Linux only)
+    TimeWarp(TimeWarpArgs),
 }
 
 #[derive(Args, Debug)]
@@ -131,6 +134,33 @@ pub struct DiffArgs {
     /// Output format
     #[arg(long, default_value = "text")]
     pub output: OutputFormat,
+}
+
+#[derive(Args, Debug)]
+pub struct TimeWarpArgs {
+    /// Target pod name
+    #[arg(long)]
+    pub pod: String,
+
+    /// Kubernetes namespace
+    #[arg(long, default_value = "default")]
+    pub namespace: String,
+
+    /// Time offset to apply (e.g., "+30d", "-2h", "+90m", "+3600s")
+    #[arg(long)]
+    pub offset: String,
+
+    /// Time speed multiplier (e.g., "10x", "0.5x")
+    #[arg(long, default_value = "1x")]
+    pub speed: String,
+
+    /// Revert a previous time warp on the pod
+    #[arg(long)]
+    pub revert: bool,
+
+    /// Container name within the pod (defaults to first container)
+    #[arg(long)]
+    pub container: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -179,7 +209,7 @@ struct RunArgs {
     #[arg(long)]
     k3d: bool,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -551,6 +581,10 @@ async fn main() -> Result<()> {
             duration,
         } => demo::run_demo(keep, seed, &duration).await?,
         Commands::Diff(args) => crate::diff::handle_diff(args).await?,
+        Commands::TimeWarp(args) => {
+            handle_time_warp(args).await?;
+            0
+        }
     };
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
@@ -801,6 +835,43 @@ async fn handle_run(
                 {
                     Ok(id) => info!("  Fault {}: DNS blocked for 15s", id),
                     Err(e) => warn!("  Failed to inject DNS fault: {}", e),
+                }
+            }
+            "time-warp" => {
+                info!("⏰ Injecting time warp on {}", target.name);
+                // Time warp uses vDSO trampoline via ephemeral container.
+                // --target shares the PID namespace with the workload container.
+                let target_container = target
+                    .container_names
+                    .first()
+                    .map(|c| c.as_str())
+                    .unwrap_or(&target.name);
+                let target_flag = format!("--target={}", target_container);
+                let mut cmd = tokio::process::Command::new("kubectl");
+                cmd.args([
+                    "debug",
+                    "-n",
+                    &args.namespace,
+                    &target.name,
+                    "--image=ghcr.io/heisensim/heisensim:latest",
+                    "--container=heisensim-timewarp",
+                    &target_flag,
+                    "--",
+                    "heisensim-inject",
+                    "--pid",
+                    "1",
+                    "--offset",
+                    "+1h",
+                ]);
+                match cmd.output().await {
+                    Ok(output) if output.status.success() => {
+                        info!("  Time warp applied (+1h offset)");
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        warn!("  Failed to inject time warp: {}", stderr.trim());
+                    }
+                    Err(e) => warn!("  Failed to inject time warp: {}", e),
                 }
             }
             other => {
@@ -2042,4 +2113,86 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
     }
 
     if any_prop_failures { Ok(1) } else { Ok(0) }
+}
+
+/// Handle the `time-warp` subcommand — inject time manipulation into a running pod.
+///
+/// This uses `kubectl debug` to inject an ephemeral container with `CAP_SYS_PTRACE`,
+/// then runs `heisensim-inject` inside it to patch the target process's vDSO.
+async fn handle_time_warp(args: TimeWarpArgs) -> Result<()> {
+    use heisensim_intercept::vdso::control::{parse_speed, parse_time_offset};
+
+    // Validate inputs before touching K8s
+    let (offset_secs, offset_nanos) = parse_time_offset(&args.offset)?;
+    let (speed_num, speed_den) = parse_speed(&args.speed)?;
+
+    info!(
+        "⏰ Time warp: pod={}, ns={}, offset={}, speed={}",
+        args.pod, args.namespace, args.offset, args.speed
+    );
+    info!(
+        "   Resolved: {}s {}ns, speed {}/{}x",
+        offset_secs, offset_nanos, speed_num, speed_den
+    );
+
+    if args.revert {
+        info!("🔄 Reverting time warp on pod {}", args.pod);
+        // Revert would kill the debug container or send a revert signal
+        // For now, we print instructions
+        println!("To revert, delete the debug container:");
+        println!(
+            "  kubectl delete pod {} -n {} --grace-period=0",
+            args.pod, args.namespace
+        );
+        return Ok(());
+    }
+
+    // Build the heisensim-inject command for the ephemeral container
+    let inject_cmd = format!(
+        "heisensim-inject --pid 1 --offset '{}' --speed '{}'",
+        args.offset, args.speed
+    );
+
+    info!("🚀 Launching ephemeral container with CAP_SYS_PTRACE...");
+    info!("   Command: {}", inject_cmd);
+
+    // Use kubectl debug to inject an ephemeral container
+    let container_name = "heisensim-timewarp";
+    // --target shares PID namespace with the workload container
+    let target_container = args.container.as_deref().unwrap_or(&args.pod);
+    let target_flag = format!("--target={}", target_container);
+    let container_flag = format!("--container={}", container_name);
+    let mut cmd = tokio::process::Command::new("kubectl");
+    cmd.args([
+        "debug",
+        "-n",
+        &args.namespace,
+        &args.pod,
+        "--image=ghcr.io/heisensim/heisensim:latest",
+        &container_flag,
+        &target_flag,
+        "--",
+        "heisensim-inject",
+        "--pid",
+        "1",
+        "--offset",
+        &args.offset,
+        "--speed",
+        &args.speed,
+    ]);
+
+    let output = cmd.output().await?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        info!("✅ Time warp applied successfully");
+        if !stdout.is_empty() {
+            println!("{}", stdout);
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to inject time warp: {}", stderr.trim());
+    }
+
+    Ok(())
 }
