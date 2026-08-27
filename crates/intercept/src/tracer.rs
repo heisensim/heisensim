@@ -70,6 +70,7 @@ pub fn trace_with_faults(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]
