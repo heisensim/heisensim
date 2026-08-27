@@ -32,7 +32,7 @@ pub struct InjectionConfig {
 /// 7. Save original function bytes
 /// 8. Overwrite function start with JMP trampoline
 /// 9. `ptrace(PTRACE_DETACH)` — target resumes with patched vDSO
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub fn inject(config: &InjectionConfig) -> Result<InjectionHandle> {
     use super::{elf, maps, trampoline};
 
@@ -143,7 +143,7 @@ pub fn inject(config: &InjectionConfig) -> Result<InjectionHandle> {
 }
 
 /// Revert a previous injection — restore original vDSO bytes.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub fn revert(handle: &InjectionHandle) -> Result<()> {
     let pid = handle.pid;
     info!(pid, "reverting vDSO injection");
@@ -174,7 +174,7 @@ pub fn revert(handle: &InjectionHandle) -> Result<()> {
 }
 
 /// Update the TimeControl in a previously injected process.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub fn update_time(handle: &InjectionHandle, control: &TimeControl) -> Result<()> {
     // We can write to /proc/pid/mem without ptrace if we have permission,
     // but to be safe we attach briefly.
@@ -262,7 +262,7 @@ fn write_proc_mem(pid: u32, addr: u64, data: &[u8]) -> Result<()> {
 /// This allocates a read-write-execute memory region in the target process
 /// by hijacking its execution to make an `mmap` syscall, then restoring
 /// the original register state.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn ptrace_mmap(pid: u32, size: usize) -> Result<u64> {
     use nix::sys::ptrace;
     use nix::unistd::Pid;
@@ -324,7 +324,7 @@ fn ptrace_mmap(pid: u32, size: usize) -> Result<u64> {
 }
 
 /// Inject a munmap syscall into the target process to free allocated memory.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn ptrace_munmap(pid: u32, addr: u64, size: usize) -> Result<()> {
     use nix::sys::ptrace;
     use nix::unistd::Pid;

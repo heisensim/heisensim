@@ -38,7 +38,7 @@ impl PtraceTracer {
     }
 
     /// Wait for the target process to enter a syscall, and return the parsed syscall.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
         use nix::sys::{
             ptrace,
@@ -136,14 +136,14 @@ impl PtraceTracer {
         Ok(syscall)
     }
 
-    /// Wait stub for non-Linux.
-    #[cfg(not(target_os = "linux"))]
+    /// Wait stub for non-x86_64-Linux.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
-        anyhow::bail!("ptrace is only supported on Linux")
+        anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
     }
 
     /// Inject the result of a syscall back into the process, modifying registers if needed.
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub fn set_result(&mut self, result: SyscallResult) -> Result<()> {
         use nix::sys::ptrace;
 
@@ -187,10 +187,10 @@ impl PtraceTracer {
         Ok(())
     }
 
-    /// Set result stub for non-Linux.
-    #[cfg(not(target_os = "linux"))]
+    /// Set result stub for non-x86_64-Linux.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     pub fn set_result(&mut self, _result: SyscallResult) -> Result<()> {
-        anyhow::bail!("ptrace is only supported on Linux")
+        anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
     }
 
     /// Detach from the traced process.
@@ -251,7 +251,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("only supported on Linux")
+                .contains("only supported on x86_64 Linux")
         );
     }
 
@@ -265,7 +265,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("only supported on Linux")
+                .contains("only supported on x86_64 Linux")
         );
     }
 
