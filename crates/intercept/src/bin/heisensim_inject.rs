@@ -21,7 +21,7 @@ struct Cli {
     pid: u32,
 
     /// Time offset to apply (e.g., "+30d", "-2h", "+90m", "+3600s").
-    #[arg(long, required_unless_present = "revert")]
+    #[arg(long, required_unless_present_any = ["revert", "fault"])]
     offset: Option<String>,
 
     /// Time speed multiplier (e.g., "10x", "0.5x").
@@ -32,9 +32,33 @@ struct Cli {
     #[arg(long)]
     revert: bool,
 
+    /// Fault type to inject (connect-error, fd-exhaustion)
+    #[arg(long, value_enum)]
+    fault: Option<FaultMode>,
+
+    /// Errno to return for connect-error (default: ECONNREFUSED = 111)
+    #[arg(long, default_value = "111")]
+    errno: i32,
+
+    /// Duration to run fault injection (e.g., "15s", "1m")
+    #[arg(long, default_value = "30s")]
+    duration: String,
+
+    /// Target port to filter (only inject faults on connections to this port)
+    #[arg(long)]
+    port: Option<u16>,
+
     /// Enable verbose logging.
     #[arg(long, short)]
     verbose: bool,
+}
+
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum FaultMode {
+    /// Inject ECONNREFUSED (or custom errno) on connect() calls
+    ConnectError,
+    /// Inject EMFILE (too many open files) on socket() calls
+    FdExhaustion,
 }
 
 fn main() -> Result<()> {
@@ -51,9 +75,45 @@ fn main() -> Result<()> {
         return revert_injection(cli.pid);
     }
 
+    if let Some(fault) = cli.fault {
+        return run_fault_injection(cli.pid, fault, cli.errno, &cli.duration, cli.port);
+    }
+
     let offset = cli.offset.as_deref().unwrap_or("+0s");
 
     inject(cli.pid, offset, &cli.speed)
+}
+
+fn parse_duration(s: &str) -> Result<std::time::Duration> {
+    humantime::parse_duration(s).map_err(|e| anyhow::anyhow!("invalid duration: {}", e))
+}
+
+fn run_fault_injection(
+    pid: u32,
+    fault: FaultMode,
+    errno: i32,
+    duration_str: &str,
+    port: Option<u16>,
+) -> Result<()> {
+    use heisensim_intercept::handler::NetworkFaultConfig;
+    use heisensim_intercept::tracer::trace_with_faults;
+
+    let duration = parse_duration(duration_str)?;
+
+    let config = match fault {
+        FaultMode::ConnectError => NetworkFaultConfig {
+            connect_error: Some(errno),
+            target_port: port,
+            ..Default::default()
+        },
+        FaultMode::FdExhaustion => NetworkFaultConfig {
+            socket_error: Some(24), // EMFILE — too many open files
+            target_port: port,
+            ..Default::default()
+        },
+    };
+
+    trace_with_faults(pid, &config, duration)
 }
 
 fn inject(pid: u32, offset: &str, speed: &str) -> Result<()> {
