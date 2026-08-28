@@ -26,7 +26,12 @@ pub fn trace_with_faults(pid: u32, config: &NetworkFaultConfig, duration: Durati
     let mut handler = SyscallHandler::with_network_fault(config.clone());
 
     tracer.trace_process(target)?;
-    tracing::info!(pid, ?duration, "attached, starting fault injection loop");
+    tracing::info!(
+        pid,
+        threads = tracer.thread_count(),
+        ?duration,
+        "attached, starting fault injection loop"
+    );
 
     let start = Instant::now();
     let result = run_loop(&mut tracer, &mut handler, duration, start);
@@ -49,9 +54,9 @@ fn run_loop(
     let deadline = start + duration;
     loop {
         match tracer.wait_for_syscall(Some(deadline))? {
-            Some(syscall) => {
+            Some((tid, syscall)) => {
                 let result = handler.handle(syscall);
-                tracer.set_result(result)?;
+                tracer.set_result(tid, result)?;
             }
             None => {
                 tracing::info!("duration expired, stopping");

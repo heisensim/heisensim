@@ -1,8 +1,10 @@
 #![allow(clippy::new_without_default)]
-/// Ptrace-based execution tracer.
+/// Ptrace-based execution tracer with multi-thread support.
 use crate::syscall::{InterceptedSyscall, SyscallResult};
 use anyhow::Result;
 use nix::unistd::Pid;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::collections::HashMap;
 
 /// Read `len` bytes from a traced process's memory at `addr`.
 ///
@@ -39,33 +41,122 @@ fn read_process_memory(pid: Pid, addr: u64, len: usize) -> Vec<u8> {
     buf
 }
 
+/// Per-thread state in the ptrace event loop.
+///
+/// Tracks whether each thread is running (resumed via PTRACE_SYSCALL)
+/// or stopped at a syscall entry waiting for the tracer to decide.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Debug)]
+enum ThreadState {
+    /// Thread has been resumed via PTRACE_SYSCALL and is running.
+    Running,
+    /// Thread is stopped at syscall-entry; we've parsed the syscall
+    /// and are waiting for set_result to be called.
+    SyscallEntry,
+}
+
 /// PtraceTracer manages traced processes and intercepts their syscalls using `ptrace`.
 ///
-/// It acts as a supervisor that pauses the process on syscall entry, examines the
-/// syscall, optionally modifies it, and then resumes the process.
+/// Supports multi-threaded targets: attaches to all threads via `/proc/PID/task/`
+/// and tracks new threads created via `clone()` using `PTRACE_O_TRACECLONE`.
 pub struct PtraceTracer {
-    pid: Option<Pid>,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    threads: HashMap<Pid, ThreadState>,
+    leader: Option<Pid>,
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    _pid: Option<Pid>,
 }
 
 impl PtraceTracer {
     /// Create a new tracer instance.
     pub fn new() -> Self {
-        Self { pid: None }
+        Self {
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            threads: HashMap::new(),
+            leader: None,
+            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            _pid: None,
+        }
     }
 
-    /// Attach the tracer to a target process by PID.
+    /// Return the number of currently traced threads.
+    pub fn thread_count(&self) -> usize {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            self.threads.len()
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            0
+        }
+    }
+
+    /// Attach the tracer to a target process and all its threads.
+    ///
+    /// Enumerates `/proc/PID/task/` to find all existing threads and attaches
+    /// to each one. Sets `PTRACE_O_TRACECLONE` to auto-trace new threads.
     #[cfg(target_os = "linux")]
     pub fn trace_process(&mut self, pid: Pid) -> Result<()> {
         use nix::sys::{ptrace, wait::waitpid};
 
-        ptrace::attach(pid)?;
-        waitpid(pid, None)?;
-        // Set TRACESYSGOOD so we can distinguish syscall stops from signal stops
-        ptrace::setoptions(
-            pid,
-            ptrace::Options::PTRACE_O_TRACESYSGOOD | ptrace::Options::PTRACE_O_EXITKILL,
-        )?;
-        self.pid = Some(pid);
+        self.leader = Some(pid);
+
+        let task_dir = format!("/proc/{}/task", pid);
+        let entries: Vec<_> = std::fs::read_dir(&task_dir)
+            .map(|rd| rd.filter_map(|e| e.ok()).collect())
+            .unwrap_or_default();
+
+        if entries.is_empty() {
+            // Fallback: just attach to the main PID
+            tracing::warn!(
+                "could not enumerate /proc/{}/task, attaching to main thread only",
+                pid
+            );
+            ptrace::attach(pid)?;
+            waitpid(pid, None)?;
+            ptrace::setoptions(
+                pid,
+                ptrace::Options::PTRACE_O_TRACESYSGOOD
+                    | ptrace::Options::PTRACE_O_EXITKILL
+                    | ptrace::Options::PTRACE_O_TRACECLONE,
+            )?;
+            #[cfg(target_arch = "x86_64")]
+            self.threads.insert(pid, ThreadState::Running);
+            return Ok(());
+        }
+
+        for entry in entries {
+            let tid_str = entry.file_name().to_string_lossy().to_string();
+            let tid_raw: i32 = match tid_str.parse() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let tid = Pid::from_raw(tid_raw);
+            match ptrace::attach(tid) {
+                Ok(()) => {}
+                Err(nix::errno::Errno::ESRCH) => {
+                    // Thread exited between enumeration and attach — skip
+                    tracing::debug!(tid = tid_raw, "thread vanished during attach, skipping");
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            }
+            waitpid(tid, None)?;
+            ptrace::setoptions(
+                tid,
+                ptrace::Options::PTRACE_O_TRACESYSGOOD
+                    | ptrace::Options::PTRACE_O_EXITKILL
+                    | ptrace::Options::PTRACE_O_TRACECLONE,
+            )?;
+            #[cfg(target_arch = "x86_64")]
+            self.threads.insert(tid, ThreadState::Running);
+        }
+
+        tracing::info!(
+            pid = pid.as_raw(),
+            threads = self.thread_count(),
+            "attached to all threads"
+        );
         Ok(())
     }
 
@@ -75,30 +166,30 @@ impl PtraceTracer {
         anyhow::bail!("ptrace is only supported on Linux")
     }
 
-    /// Wait for the target process to enter a syscall, and return the parsed syscall.
+    /// Wait for any traced thread to enter a syscall.
     ///
-    /// If `deadline` is `Some`, returns `Ok(None)` when the deadline expires without
-    /// a syscall stop. Uses non-blocking `WNOHANG` polling with idle backoff.
-    /// If `deadline` is `None`, blocks until the next syscall (legacy behavior for vDSO).
+    /// Returns the thread PID and the parsed syscall, or `Ok(None)` if the
+    /// deadline expires. Handles clone events (new threads) and thread exits
+    /// transparently.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub fn wait_for_syscall(
         &mut self,
         deadline: Option<std::time::Instant>,
-    ) -> Result<Option<InterceptedSyscall>> {
+    ) -> Result<Option<(Pid, InterceptedSyscall)>> {
         use nix::sys::{
             ptrace,
             wait::{WaitPidFlag, WaitStatus, waitpid},
         };
 
-        let pid = self
-            .pid
-            .ok_or_else(|| anyhow::anyhow!("no process attached"))?;
-
-        // Resume until next syscall entry
-        ptrace::syscall(pid, None)?;
+        // Resume all threads that are in Running state
+        for (&tid, state) in self.threads.iter() {
+            if matches!(state, ThreadState::Running) {
+                let _ = ptrace::syscall(tid, None);
+            }
+        }
 
         loop {
-            // Check deadline before waiting
+            // Check deadline
             if let Some(d) = deadline {
                 if std::time::Instant::now() >= d {
                     return Ok(None);
@@ -106,55 +197,101 @@ impl PtraceTracer {
             }
 
             // Use WNOHANG when we have a deadline, blocking wait otherwise
+            // Always use __WALL to catch clone threads
             let wait_flags = if deadline.is_some() {
-                Some(WaitPidFlag::WNOHANG)
+                Some(WaitPidFlag::WNOHANG | WaitPidFlag::__WALL)
             } else {
-                None
+                Some(WaitPidFlag::__WALL)
             };
 
-            match waitpid(pid, wait_flags)? {
+            match waitpid(None, wait_flags)? {
                 WaitStatus::StillAlive => {
-                    // Target is idle — back off briefly before polling again
                     std::thread::sleep(std::time::Duration::from_millis(10));
                     continue;
                 }
-                WaitStatus::PtraceSyscall(_) => {
-                    // Syscall stop — read registers below
-                    break;
+                WaitStatus::PtraceSyscall(tid) => {
+                    let regs = ptrace::getregs(tid)?;
+                    let syscall = self.parse_syscall(tid, regs);
+                    self.threads.insert(tid, ThreadState::SyscallEntry);
+                    return Ok(Some((tid, syscall)));
                 }
-                WaitStatus::Stopped(_, sig) => {
-                    // Signal-delivery stop — forward the signal and wait again
-                    ptrace::syscall(pid, Some(sig))?;
-                    match waitpid(pid, wait_flags)? {
-                        WaitStatus::PtraceSyscall(_) => break,
-                        WaitStatus::StillAlive => continue,
-                        WaitStatus::Signaled(_, sig, _) => {
-                            anyhow::bail!("traced process killed by signal {:?}", sig);
+                WaitStatus::PtraceEvent(tid, _sig, event)
+                    if event == libc::PTRACE_EVENT_CLONE as i32 =>
+                {
+                    let new_tid_raw = ptrace::getevent(tid)? as i32;
+                    let new_tid = Pid::from_raw(new_tid_raw);
+                    tracing::debug!(
+                        parent = tid.as_raw(),
+                        child = new_tid_raw,
+                        "new thread detected via PTRACE_EVENT_CLONE"
+                    );
+                    match waitpid(new_tid, Some(WaitPidFlag::__WALL)) {
+                        Ok(_) => {
+                            ptrace::setoptions(
+                                new_tid,
+                                ptrace::Options::PTRACE_O_TRACESYSGOOD
+                                    | ptrace::Options::PTRACE_O_EXITKILL
+                                    | ptrace::Options::PTRACE_O_TRACECLONE,
+                            )?;
+                            let _ = ptrace::syscall(new_tid, None);
+                            self.threads.insert(new_tid, ThreadState::Running);
                         }
-                        WaitStatus::Exited(_, code) => {
-                            anyhow::bail!("traced process exited with code {}", code);
+                        Err(nix::errno::Errno::ECHILD) => {
+                            tracing::debug!(
+                                tid = new_tid_raw,
+                                "cloned thread exited before attach"
+                            );
                         }
-                        _ => continue,
+                        Err(e) => return Err(e.into()),
                     }
+                    let _ = ptrace::syscall(tid, None);
+                    self.threads.insert(tid, ThreadState::Running);
+                    continue;
                 }
-                WaitStatus::Signaled(_, sig, _) => {
-                    anyhow::bail!("traced process killed by signal {:?}", sig);
+                WaitStatus::Stopped(tid, sig) => {
+                    let _ = ptrace::syscall(tid, Some(sig));
+                    if let Some(state) = self.threads.get_mut(&tid) {
+                        *state = ThreadState::Running;
+                    }
+                    continue;
                 }
-                WaitStatus::Exited(_, code) => {
-                    anyhow::bail!("traced process exited with code {}", code);
+                WaitStatus::Exited(tid, code) => {
+                    self.threads.remove(&tid);
+                    if Some(tid) == self.leader {
+                        tracing::info!(code, "leader thread exited, stopping");
+                        return Ok(None);
+                    }
+                    if self.threads.is_empty() {
+                        tracing::info!("all threads exited, stopping");
+                        return Ok(None);
+                    }
+                    tracing::debug!(
+                        tid = tid.as_raw(),
+                        code,
+                        remaining = self.threads.len(),
+                        "worker thread exited"
+                    );
+                    continue;
                 }
-                status => {
-                    tracing::debug!(?status, "unexpected wait status, retrying");
+                WaitStatus::Signaled(tid, sig, _) => {
+                    self.threads.remove(&tid);
+                    if Some(tid) == self.leader || self.threads.is_empty() {
+                        anyhow::bail!("traced process killed by signal {:?}", sig);
+                    }
+                    tracing::debug!(tid = tid.as_raw(), ?sig, "worker thread killed by signal");
+                    continue;
+                }
+                _status => {
                     continue;
                 }
             }
         }
+    }
 
-        // Read registers to determine which syscall
-        let regs = ptrace::getregs(pid)?;
-
-        // Map syscall number to our enum (x86_64 syscall numbers)
-        let syscall = match regs.orig_rax as i64 {
+    /// Parse registers into an InterceptedSyscall enum.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn parse_syscall(&self, pid: Pid, regs: libc::user_regs_struct) -> InterceptedSyscall {
+        match regs.orig_rax as i64 {
             228 => InterceptedSyscall::ClockGettime {
                 clock_id: regs.rdi as i32,
             },
@@ -171,7 +308,6 @@ impl PtraceTracer {
                 protocol: regs.rdx as i32,
             },
             42 => {
-                // connect(fd, addr, addrlen) — rsi=sockaddr*, rdx=addrlen
                 let addr_ptr = regs.rsi;
                 let addr_len = (regs.rdx as usize).min(128);
                 let addr = read_process_memory(pid, addr_ptr, addr_len);
@@ -192,7 +328,6 @@ impl PtraceTracer {
                 fd: regs.rdi as i32,
             },
             49 => {
-                // bind(fd, addr, addrlen) — rsi=sockaddr*, rdx=addrlen
                 let addr_ptr = regs.rsi;
                 let addr_len = (regs.rdx as usize).min(128);
                 let addr = read_process_memory(pid, addr_ptr, addr_len);
@@ -202,9 +337,7 @@ impl PtraceTracer {
                 }
             }
             nr => InterceptedSyscall::Unknown { syscall_nr: nr },
-        };
-
-        Ok(Some(syscall))
+        }
     }
 
     /// Wait stub for non-x86_64-Linux.
@@ -212,23 +345,22 @@ impl PtraceTracer {
     pub fn wait_for_syscall(
         &mut self,
         _deadline: Option<std::time::Instant>,
-    ) -> Result<Option<InterceptedSyscall>> {
+    ) -> Result<Option<(Pid, InterceptedSyscall)>> {
         anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
     }
 }
 
-/// Wait for syscall-exit stop, forwarding any intervening signals.
+/// Wait for syscall-exit stop on a specific thread, forwarding any intervening signals.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn wait_for_syscall_exit(pid: Pid) -> Result<()> {
     use nix::sys::{
         ptrace,
-        wait::{WaitStatus, waitpid},
+        wait::{WaitPidFlag, WaitStatus, waitpid},
     };
     loop {
-        match waitpid(pid, None)? {
+        match waitpid(pid, Some(WaitPidFlag::__WALL))? {
             WaitStatus::PtraceSyscall(_) => return Ok(()),
             WaitStatus::Stopped(_, sig) => {
-                // Forward the signal and continue waiting
                 ptrace::syscall(pid, Some(sig))?;
             }
             WaitStatus::Signaled(_, sig, _) => {
@@ -243,76 +375,78 @@ fn wait_for_syscall_exit(pid: Pid) -> Result<()> {
 }
 
 impl PtraceTracer {
-    /// Inject the result of a syscall back into the process, modifying registers if needed.
+    /// Inject the result of a syscall back into a specific thread.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub fn set_result(&mut self, result: SyscallResult) -> Result<()> {
+    pub fn set_result(&mut self, tid: Pid, result: SyscallResult) -> Result<()> {
         use nix::sys::ptrace;
-
-        let pid = self
-            .pid
-            .ok_or_else(|| anyhow::anyhow!("no process attached"))?;
 
         match result {
             SyscallResult::Allow => {
-                // Let the syscall proceed normally — resume to exit
-                ptrace::syscall(pid, None)?;
-                wait_for_syscall_exit(pid)?;
+                ptrace::syscall(tid, None)?;
+                wait_for_syscall_exit(tid)?;
             }
             SyscallResult::Replace(value) => {
-                // Skip to syscall exit, then override RAX with our value
-                ptrace::syscall(pid, None)?;
-                wait_for_syscall_exit(pid)?;
-                let mut regs = ptrace::getregs(pid)?;
+                ptrace::syscall(tid, None)?;
+                wait_for_syscall_exit(tid)?;
+                let mut regs = ptrace::getregs(tid)?;
                 regs.rax = value as u64;
-                ptrace::setregs(pid, regs)?;
+                ptrace::setregs(tid, regs)?;
             }
             SyscallResult::Block(errno) => {
-                // Replace syscall number with -1 (invalid) so kernel returns ENOSYS,
-                // then override with our errno
-                let mut regs = ptrace::getregs(pid)?;
-                regs.orig_rax = u64::MAX; // -1: invalid syscall
-                ptrace::setregs(pid, regs)?;
-                ptrace::syscall(pid, None)?;
-                wait_for_syscall_exit(pid)?;
-                let mut regs = ptrace::getregs(pid)?;
+                let mut regs = ptrace::getregs(tid)?;
+                regs.orig_rax = u64::MAX;
+                ptrace::setregs(tid, regs)?;
+                ptrace::syscall(tid, None)?;
+                wait_for_syscall_exit(tid)?;
+                let mut regs = ptrace::getregs(tid)?;
                 regs.rax = (-errno as i64) as u64;
-                ptrace::setregs(pid, regs)?;
+                ptrace::setregs(tid, regs)?;
             }
             SyscallResult::Delay(duration) => {
-                // Sleep to introduce latency, then let the syscall proceed
                 std::thread::sleep(duration);
-                ptrace::syscall(pid, None)?;
-                wait_for_syscall_exit(pid)?;
+                ptrace::syscall(tid, None)?;
+                wait_for_syscall_exit(tid)?;
             }
             SyscallResult::Redirect => {
-                // Redirect is not yet implemented — treat as allow
-                ptrace::syscall(pid, None)?;
-                wait_for_syscall_exit(pid)?;
+                ptrace::syscall(tid, None)?;
+                wait_for_syscall_exit(tid)?;
             }
         }
 
+        // Mark thread as running again after handling
+        self.threads.insert(tid, ThreadState::Running);
         Ok(())
     }
 
     /// Set result stub for non-x86_64-Linux.
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    pub fn set_result(&mut self, _result: SyscallResult) -> Result<()> {
+    pub fn set_result(&mut self, _tid: Pid, _result: SyscallResult) -> Result<()> {
         anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
     }
 
-    /// Detach from the traced process.
+    /// Detach from all traced threads.
     #[cfg(target_os = "linux")]
     pub fn detach(&mut self) -> Result<()> {
-        if let Some(pid) = self.pid.take() {
-            nix::sys::ptrace::detach(pid, None)?;
+        #[cfg(target_arch = "x86_64")]
+        {
+            for tid in self.threads.drain().map(|(tid, _)| tid) {
+                if let Err(e) = nix::sys::ptrace::detach(tid, None) {
+                    tracing::debug!(tid = tid.as_raw(), error = %e, "failed to detach thread");
+                }
+            }
         }
+        self.leader = None;
         Ok(())
     }
 
     /// Detach stub for non-Linux.
     #[cfg(not(target_os = "linux"))]
     pub fn detach(&mut self) -> Result<()> {
-        self.pid = None;
+        self.leader = None;
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            self._pid = None;
+        }
         Ok(())
     }
 }
@@ -324,13 +458,13 @@ mod tests {
     #[test]
     fn test_new_tracer() {
         let tracer = PtraceTracer::new();
-        assert!(tracer.pid.is_none());
+        assert!(tracer.leader.is_none());
+        assert_eq!(tracer.thread_count(), 0);
     }
 
     #[test]
     fn test_detach_without_attach_is_ok() {
         let mut tracer = PtraceTracer::new();
-        // Detaching when nothing is attached should succeed silently
         assert!(tracer.detach().is_ok());
     }
 
@@ -366,7 +500,7 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     fn test_set_result_non_linux_errors() {
         let mut tracer = PtraceTracer::new();
-        let result = tracer.set_result(SyscallResult::Allow);
+        let result = tracer.set_result(Pid::from_raw(1), SyscallResult::Allow);
         assert!(result.is_err());
         assert!(
             result
@@ -378,11 +512,10 @@ mod tests {
 
     #[test]
     #[cfg(not(target_os = "linux"))]
-    fn test_detach_non_linux_clears_pid() {
+    fn test_detach_non_linux_clears_leader() {
         let mut tracer = PtraceTracer::new();
-        // Manually set pid to simulate an attached state
-        tracer.pid = Some(Pid::from_raw(42));
+        tracer.leader = Some(Pid::from_raw(42));
         assert!(tracer.detach().is_ok());
-        assert!(tracer.pid.is_none());
+        assert!(tracer.leader.is_none());
     }
 }
