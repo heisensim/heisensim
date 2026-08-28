@@ -21,7 +21,7 @@ use std::time::Instant;
 pub fn trace_with_faults(pid: u32, config: &NetworkFaultConfig, duration: Duration) -> Result<()> {
     use nix::unistd::Pid;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
 
     let target = Pid::from_raw(pid as i32);
     let mut tracer = PtraceTracer::new();
