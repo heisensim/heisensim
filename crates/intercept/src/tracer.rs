@@ -20,6 +20,8 @@ use std::time::Instant;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub fn trace_with_faults(pid: u32, config: &NetworkFaultConfig, duration: Duration) -> Result<()> {
     use nix::unistd::Pid;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let target = Pid::from_raw(pid as i32);
     let mut tracer = PtraceTracer::new();
@@ -33,10 +35,18 @@ pub fn trace_with_faults(pid: u32, config: &NetworkFaultConfig, duration: Durati
         "attached, starting fault injection loop"
     );
 
-    let start = Instant::now();
-    let result = run_loop(&mut tracer, &mut handler, duration, start);
+    // Register SIGINT handler for clean detach on Ctrl-C
+    let shutdown = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
 
-    // Always detach, even on error
+    let start = Instant::now();
+    let result = run_loop(&mut tracer, &mut handler, duration, start, &shutdown);
+
+    // Always detach, even on error — iterates all tracked TIDs
+    tracing::info!(
+        threads = tracer.thread_count(),
+        "detaching from all threads"
+    );
     if let Err(e) = tracer.detach() {
         tracing::warn!("failed to detach: {}", e);
     }
@@ -50,9 +60,18 @@ fn run_loop(
     handler: &mut SyscallHandler,
     duration: Duration,
     start: Instant,
+    shutdown: &std::sync::atomic::AtomicBool,
 ) -> Result<()> {
+    use std::sync::atomic::Ordering;
+
     let deadline = start + duration;
     loop {
+        // Check for SIGINT before waiting
+        if shutdown.load(Ordering::Relaxed) {
+            tracing::info!("SIGINT received, stopping gracefully");
+            return Ok(());
+        }
+
         match tracer.wait_for_syscall(Some(deadline))? {
             Some((tid, syscall)) => {
                 let result = handler.handle(syscall);
