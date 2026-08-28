@@ -5,6 +5,24 @@
 //! - Time syscalls return values from the virtual clock / time control.
 //! - Network and randomness syscalls are planned for future phases.
 
+/// Extract the destination port from a raw `sockaddr` byte buffer.
+///
+/// Supports `AF_INET` (2) and `AF_INET6` (10). Returns `None` for
+/// `AF_UNIX`, unsupported families, or buffers too short to contain a port.
+pub fn extract_port(addr: &[u8]) -> Option<u16> {
+    if addr.len() < 4 {
+        return None;
+    }
+    let family = u16::from_ne_bytes([addr[0], addr[1]]);
+    match family {
+        2 | 10 => {
+            // AF_INET / AF_INET6: port is at bytes 2..4 in network byte order
+            Some(u16::from_be_bytes([addr[2], addr[3]]))
+        }
+        _ => None, // AF_UNIX, AF_NETLINK, etc. — no IP port
+    }
+}
+
 use crate::syscall::{InterceptedSyscall, SyscallResult};
 use crate::vdso::control::TimeControl;
 
@@ -119,8 +137,15 @@ impl SyscallHandler {
                 }
                 SyscallResult::Allow
             }
-            InterceptedSyscall::Connect { .. } => {
+            InterceptedSyscall::Connect { ref addr, .. } => {
                 if let Some(ref config) = self.network_fault {
+                    // Check port filter — skip fault if port doesn't match
+                    if let Some(target_port) = config.target_port {
+                        match extract_port(addr) {
+                            Some(port) if port == target_port => {} // match — continue to fault
+                            _ => return SyscallResult::Allow,       // no match or can't parse
+                        }
+                    }
                     if let Some(errno) = config.connect_error {
                         return SyscallResult::Block(errno);
                     }
@@ -287,5 +312,104 @@ mod tests {
         });
         // Block should take precedence over Delay
         assert_eq!(result, SyscallResult::Block(111));
+    }
+
+    #[test]
+    fn test_extract_port_ipv4() {
+        // AF_INET (2) sockaddr_in: family=2, port=443 (0x01BB)
+        let mut addr = vec![0u8; 16];
+        let family: u16 = 2; // AF_INET
+        addr[0..2].copy_from_slice(&family.to_ne_bytes());
+        addr[2..4].copy_from_slice(&443u16.to_be_bytes());
+        assert_eq!(extract_port(&addr), Some(443));
+    }
+
+    #[test]
+    fn test_extract_port_ipv6() {
+        // AF_INET6 (10) sockaddr_in6: family=10, port=8080
+        let mut addr = vec![0u8; 28];
+        let family: u16 = 10; // AF_INET6
+        addr[0..2].copy_from_slice(&family.to_ne_bytes());
+        addr[2..4].copy_from_slice(&8080u16.to_be_bytes());
+        assert_eq!(extract_port(&addr), Some(8080));
+    }
+
+    #[test]
+    fn test_extract_port_unix_socket() {
+        // AF_UNIX (1) — no IP port
+        let mut addr = vec![0u8; 16];
+        let family: u16 = 1;
+        addr[0..2].copy_from_slice(&family.to_ne_bytes());
+        assert_eq!(extract_port(&addr), None);
+    }
+
+    #[test]
+    fn test_extract_port_too_short() {
+        assert_eq!(extract_port(&[]), None);
+        assert_eq!(extract_port(&[2, 0]), None); // family only, no port
+        assert_eq!(extract_port(&[2, 0, 0]), None); // 3 bytes, need 4
+    }
+
+    #[test]
+    fn test_handler_connect_port_filter_match() {
+        // Port matches target — should fault
+        let config = NetworkFaultConfig {
+            connect_error: Some(111),
+            target_port: Some(5432),
+            ..Default::default()
+        };
+        let mut handler = SyscallHandler::with_network_fault(config);
+        let mut addr = vec![0u8; 16];
+        addr[0..2].copy_from_slice(&2u16.to_ne_bytes()); // AF_INET
+        addr[2..4].copy_from_slice(&5432u16.to_be_bytes());
+        let result = handler.handle(InterceptedSyscall::Connect { fd: 5, addr });
+        assert_eq!(result, SyscallResult::Block(111));
+    }
+
+    #[test]
+    fn test_handler_connect_port_filter_no_match() {
+        // Port doesn't match target — should allow
+        let config = NetworkFaultConfig {
+            connect_error: Some(111),
+            target_port: Some(5432),
+            ..Default::default()
+        };
+        let mut handler = SyscallHandler::with_network_fault(config);
+        let mut addr = vec![0u8; 16];
+        addr[0..2].copy_from_slice(&2u16.to_ne_bytes()); // AF_INET
+        addr[2..4].copy_from_slice(&6379u16.to_be_bytes()); // Redis, not Postgres
+        let result = handler.handle(InterceptedSyscall::Connect { fd: 5, addr });
+        assert_eq!(result, SyscallResult::Allow);
+    }
+
+    #[test]
+    fn test_handler_connect_no_port_filter() {
+        // No port filter — should fault all connections
+        let config = NetworkFaultConfig {
+            connect_error: Some(111),
+            target_port: None,
+            ..Default::default()
+        };
+        let mut handler = SyscallHandler::with_network_fault(config);
+        let result = handler.handle(InterceptedSyscall::Connect {
+            fd: 5,
+            addr: vec![],
+        });
+        assert_eq!(result, SyscallResult::Block(111));
+    }
+
+    #[test]
+    fn test_handler_connect_port_filter_unix_socket_allows() {
+        // Unix socket with port filter set — can't parse port, should allow
+        let config = NetworkFaultConfig {
+            connect_error: Some(111),
+            target_port: Some(5432),
+            ..Default::default()
+        };
+        let mut handler = SyscallHandler::with_network_fault(config);
+        let mut addr = vec![0u8; 16];
+        addr[0..2].copy_from_slice(&1u16.to_ne_bytes()); // AF_UNIX
+        let result = handler.handle(InterceptedSyscall::Connect { fd: 5, addr });
+        assert_eq!(result, SyscallResult::Allow);
     }
 }

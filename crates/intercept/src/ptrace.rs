@@ -4,6 +4,41 @@ use crate::syscall::{InterceptedSyscall, SyscallResult};
 use anyhow::Result;
 use nix::unistd::Pid;
 
+/// Read `len` bytes from a traced process's memory at `addr`.
+///
+/// Uses `ptrace::read` (PTRACE_PEEKDATA) in word-sized chunks (8 bytes on x86_64).
+/// Returns the bytes read, or an empty vec on any error (graceful fallback).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn read_process_memory(pid: Pid, addr: u64, len: usize) -> Vec<u8> {
+    use nix::sys::ptrace;
+
+    if len == 0 {
+        return vec![];
+    }
+
+    let word_size = std::mem::size_of::<libc::c_long>();
+    let mut buf = Vec::with_capacity(len);
+    let mut offset = 0usize;
+
+    while buf.len() < len {
+        let ptr = (addr as usize + offset) as *mut libc::c_void;
+        match ptrace::read(pid, ptr) {
+            Ok(word) => {
+                let bytes = word.to_ne_bytes();
+                let remaining = len - buf.len();
+                buf.extend_from_slice(&bytes[..remaining.min(word_size)]);
+                offset += word_size;
+            }
+            Err(_) => {
+                // Can't read target memory — return what we have (may be empty)
+                break;
+            }
+        }
+    }
+
+    buf
+}
+
 /// PtraceTracer manages traced processes and intercepts their syscalls using `ptrace`.
 ///
 /// It acts as a supervisor that pauses the process on syscall entry, examines the
@@ -135,10 +170,16 @@ impl PtraceTracer {
                 sock_type: regs.rsi as i32,
                 protocol: regs.rdx as i32,
             },
-            42 => InterceptedSyscall::Connect {
-                fd: regs.rdi as i32,
-                addr: vec![],
-            },
+            42 => {
+                // connect(fd, addr, addrlen) — rsi=sockaddr*, rdx=addrlen
+                let addr_ptr = regs.rsi;
+                let addr_len = (regs.rdx as usize).min(128);
+                let addr = read_process_memory(pid, addr_ptr, addr_len);
+                InterceptedSyscall::Connect {
+                    fd: regs.rdi as i32,
+                    addr,
+                }
+            }
             44 => InterceptedSyscall::Send {
                 fd: regs.rdi as i32,
                 len: regs.rdx as usize,
@@ -150,10 +191,16 @@ impl PtraceTracer {
             43 => InterceptedSyscall::Accept {
                 fd: regs.rdi as i32,
             },
-            49 => InterceptedSyscall::Bind {
-                fd: regs.rdi as i32,
-                addr: vec![],
-            },
+            49 => {
+                // bind(fd, addr, addrlen) — rsi=sockaddr*, rdx=addrlen
+                let addr_ptr = regs.rsi;
+                let addr_len = (regs.rdx as usize).min(128);
+                let addr = read_process_memory(pid, addr_ptr, addr_len);
+                InterceptedSyscall::Bind {
+                    fd: regs.rdi as i32,
+                    addr,
+                }
+            }
             nr => InterceptedSyscall::Unknown { syscall_nr: nr },
         };
 
