@@ -41,6 +41,8 @@ pub enum SyscallResult {
     Replace(i64),
     /// Block the syscall and return an error number (errno)
     Block(i32),
+    /// Delay the syscall by sleeping for the specified duration, then allow it
+    Delay(std::time::Duration),
     /// Redirect the syscall (e.g. to another file descriptor or path)
     Redirect,
 }
