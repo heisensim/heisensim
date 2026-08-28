@@ -123,6 +123,11 @@ fn run_fault_injection(
         );
     }
 
+    // Port filtering is only meaningful for connect() — socket() has no address
+    if matches!(fault, FaultMode::FdExhaustion) && port.is_some() {
+        anyhow::bail!("--port cannot be used with fd-exhaustion: socket() has no destination port");
+    }
+
     let config = match fault {
         FaultMode::ConnectError => NetworkFaultConfig {
             connect_error: Some(errno),
