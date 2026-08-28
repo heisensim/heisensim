@@ -215,9 +215,7 @@ impl PtraceTracer {
                     self.threads.insert(tid, ThreadState::SyscallEntry);
                     return Ok(Some((tid, syscall)));
                 }
-                WaitStatus::PtraceEvent(tid, _sig, event)
-                    if event == libc::PTRACE_EVENT_CLONE as i32 =>
-                {
+                WaitStatus::PtraceEvent(tid, _sig, event) if event == libc::PTRACE_EVENT_CLONE => {
                     let new_tid_raw = ptrace::getevent(tid)? as i32;
                     let new_tid = Pid::from_raw(new_tid_raw);
                     tracing::debug!(
