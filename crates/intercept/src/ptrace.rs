@@ -207,6 +207,12 @@ impl PtraceTracer {
                 regs.rax = (-errno as i64) as u64;
                 ptrace::setregs(pid, regs)?;
             }
+            SyscallResult::Delay(duration) => {
+                // Sleep to introduce latency, then let the syscall proceed
+                std::thread::sleep(duration);
+                ptrace::syscall(pid, None)?;
+                wait_for_syscall_exit(pid)?;
+            }
             SyscallResult::Redirect => {
                 // Redirect is not yet implemented — treat as allow
                 ptrace::syscall(pid, None)?;

@@ -15,6 +15,8 @@ pub struct NetworkFaultConfig {
     pub connect_error: Option<i32>,
     /// If set, `socket()` calls return this errno (e.g. libc::EMFILE = 24)
     pub socket_error: Option<i32>,
+    /// If set, delay `connect()` calls by this many milliseconds, then allow
+    pub connect_latency_ms: Option<u64>,
     /// Optional port filter — only inject faults for connections to this port
     pub target_port: Option<u16>,
 }
@@ -121,6 +123,9 @@ impl SyscallHandler {
                 if let Some(ref config) = self.network_fault {
                     if let Some(errno) = config.connect_error {
                         return SyscallResult::Block(errno);
+                    }
+                    if let Some(ms) = config.connect_latency_ms {
+                        return SyscallResult::Delay(std::time::Duration::from_millis(ms));
                     }
                 }
                 SyscallResult::Allow
@@ -249,5 +254,38 @@ mod tests {
             addr: vec![],
         });
         assert_eq!(result, SyscallResult::Allow);
+    }
+
+    #[test]
+    fn test_handler_connect_delay_with_latency() {
+        let config = NetworkFaultConfig {
+            connect_latency_ms: Some(200),
+            ..Default::default()
+        };
+        let mut handler = SyscallHandler::with_network_fault(config);
+        let result = handler.handle(InterceptedSyscall::Connect {
+            fd: 5,
+            addr: vec![],
+        });
+        assert_eq!(
+            result,
+            SyscallResult::Delay(std::time::Duration::from_millis(200))
+        );
+    }
+
+    #[test]
+    fn test_handler_connect_error_takes_precedence_over_latency() {
+        let config = NetworkFaultConfig {
+            connect_error: Some(111),
+            connect_latency_ms: Some(200),
+            ..Default::default()
+        };
+        let mut handler = SyscallHandler::with_network_fault(config);
+        let result = handler.handle(InterceptedSyscall::Connect {
+            fd: 5,
+            addr: vec![],
+        });
+        // Block should take precedence over Delay
+        assert_eq!(result, SyscallResult::Block(111));
     }
 }

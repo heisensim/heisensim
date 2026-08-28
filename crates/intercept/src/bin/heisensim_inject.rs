@@ -48,6 +48,10 @@ struct Cli {
     #[arg(long)]
     port: Option<u16>,
 
+    /// Latency in milliseconds to add to connect() calls (for connect-latency mode)
+    #[arg(long, default_value = "200")]
+    latency: u64,
+
     /// Enable verbose logging.
     #[arg(long, short)]
     verbose: bool,
@@ -59,6 +63,8 @@ enum FaultMode {
     ConnectError,
     /// Inject EMFILE (too many open files) on socket() calls
     FdExhaustion,
+    /// Add latency to connect() calls
+    ConnectLatency,
 }
 
 fn main() -> Result<()> {
@@ -76,7 +82,14 @@ fn main() -> Result<()> {
     }
 
     if let Some(fault) = cli.fault {
-        return run_fault_injection(cli.pid, fault, cli.errno, &cli.duration, cli.port);
+        return run_fault_injection(
+            cli.pid,
+            fault,
+            cli.errno,
+            &cli.duration,
+            cli.port,
+            cli.latency,
+        );
     }
 
     let offset = cli.offset.as_deref().unwrap_or("+0s");
@@ -94,11 +107,21 @@ fn run_fault_injection(
     errno: i32,
     duration_str: &str,
     port: Option<u16>,
+    latency_ms: u64,
 ) -> Result<()> {
     use heisensim_intercept::handler::NetworkFaultConfig;
     use heisensim_intercept::tracer::trace_with_faults;
 
     let duration = parse_duration(duration_str)?;
+
+    // Validate errno: Linux syscalls signal errors via -errno in RAX.
+    // Values outside 1..=4095 would produce non-error results.
+    if matches!(fault, FaultMode::ConnectError) && !(1..=4095).contains(&errno) {
+        anyhow::bail!(
+            "invalid errno {}: must be in range 1..=4095 (e.g. 111 for ECONNREFUSED)",
+            errno
+        );
+    }
 
     let config = match fault {
         FaultMode::ConnectError => NetworkFaultConfig {
@@ -108,6 +131,11 @@ fn run_fault_injection(
         },
         FaultMode::FdExhaustion => NetworkFaultConfig {
             socket_error: Some(24), // EMFILE — too many open files
+            target_port: port,
+            ..Default::default()
+        },
+        FaultMode::ConnectLatency => NetworkFaultConfig {
+            connect_latency_ms: Some(latency_ms),
             target_port: port,
             ..Default::default()
         },

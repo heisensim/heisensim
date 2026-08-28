@@ -203,6 +203,8 @@ pub enum ProcessFaultType {
     ConnectError,
     /// Exhaust file descriptors (EMFILE on socket())
     FdExhaustion,
+    /// Add latency to connect() calls
+    ConnectLatency,
 }
 
 #[derive(Args, Debug)]
@@ -251,7 +253,7 @@ struct RunArgs {
     #[arg(long)]
     k3d: bool,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion, connect-latency)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -360,7 +362,7 @@ struct ReplayArgs {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion, connect-latency)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -442,7 +444,7 @@ struct ExploreArgs {
     #[arg(long)]
     bisect: bool,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion, connect-latency)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -1012,6 +1014,55 @@ async fn handle_run(
                         warn!("  Failed to inject fd-exhaustion: {}", stderr.trim());
                     }
                     Err(e) => warn!("  Failed to inject fd-exhaustion: {}", e),
+                }
+            }
+            "connect-latency" => {
+                info!("🔌 Injecting connect-latency on {}", target.name);
+                let container_name =
+                    format!("heisensim-fault-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let target_flag = format!(
+                    "--target={}",
+                    target
+                        .container_names
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or(&target.name)
+                );
+                let container_flag = format!("--container={}", container_name);
+                let duration_str = "15s".to_string();
+
+                let output = tokio::process::Command::new("kubectl")
+                    .args([
+                        "debug",
+                        "-n",
+                        &args.namespace,
+                        &target.name,
+                        "--image=ghcr.io/heisensim/heisensim:latest",
+                        &container_flag,
+                        &target_flag,
+                        "--",
+                        "heisensim-inject",
+                        "--pid",
+                        "1",
+                        "--fault",
+                        "connect-latency",
+                        "--latency",
+                        "200",
+                        "--duration",
+                        &duration_str,
+                    ])
+                    .output()
+                    .await;
+
+                match output {
+                    Ok(o) if o.status.success() => {
+                        info!("  ✅ connect-latency active for {}", duration_str);
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        warn!("  Failed to inject connect-latency: {}", stderr.trim());
+                    }
+                    Err(e) => warn!("  Failed to inject connect-latency: {}", e),
                 }
             }
             other => {
@@ -2345,6 +2396,7 @@ async fn handle_process_fault(args: ProcessFaultArgs) -> Result<()> {
     let fault_str = match args.fault {
         ProcessFaultType::ConnectError => "connect-error",
         ProcessFaultType::FdExhaustion => "fd-exhaustion",
+        ProcessFaultType::ConnectLatency => "connect-latency",
     };
 
     info!(
