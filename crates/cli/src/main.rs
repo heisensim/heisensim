@@ -95,6 +95,9 @@ enum Commands {
 
     /// Manipulate time in a running pod via vDSO trampoline (Linux only)
     TimeWarp(TimeWarpArgs),
+
+    /// Inject process-level faults (connect-error, fd-exhaustion) via ptrace (Linux only)
+    ProcessFault(ProcessFaultArgs),
 }
 
 #[derive(Args, Debug)]
@@ -164,6 +167,45 @@ pub struct TimeWarpArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct ProcessFaultArgs {
+    /// Target pod name
+    #[arg(long)]
+    pub pod: String,
+
+    /// Kubernetes namespace
+    #[arg(long, default_value = "default")]
+    pub namespace: String,
+
+    /// Fault type to inject
+    #[arg(long, value_enum)]
+    pub fault: ProcessFaultType,
+
+    /// Duration to run fault injection (e.g., "30s", "1m", "5m")
+    #[arg(long, default_value = "30s")]
+    pub duration: String,
+
+    /// Target port to filter (only inject faults on connections to this port)
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Custom errno for connect-error (default: 111/ECONNREFUSED)
+    #[arg(long, default_value = "111")]
+    pub errno: i32,
+
+    /// Container name within the pod (defaults to first container)
+    #[arg(long)]
+    pub container: Option<String>,
+}
+
+#[derive(Clone, Debug, clap::ValueEnum)]
+pub enum ProcessFaultType {
+    /// Reject all connect() calls with ECONNREFUSED
+    ConnectError,
+    /// Exhaust file descriptors (EMFILE on socket())
+    FdExhaustion,
+}
+
+#[derive(Args, Debug)]
 pub struct InitArgs {
     /// Output path (default: heisensim.toml)
     #[arg(short, long, default_value = "heisensim.toml")]
@@ -209,7 +251,7 @@ struct RunArgs {
     #[arg(long)]
     k3d: bool,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -318,7 +360,7 @@ struct ReplayArgs {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -400,7 +442,7 @@ struct ExploreArgs {
     #[arg(long)]
     bisect: bool,
 
-    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction)
+    /// Fault types to inject (available: crash, latency, partition, stress, dns, eviction, time-warp, connect-error, fd-exhaustion)
     #[arg(
         long,
         default_value = "crash,latency,partition,stress,dns",
@@ -583,6 +625,10 @@ async fn main() -> Result<()> {
         Commands::Diff(args) => crate::diff::handle_diff(args).await?,
         Commands::TimeWarp(args) => {
             handle_time_warp(args).await?;
+            0
+        }
+        Commands::ProcessFault(args) => {
+            handle_process_fault(args).await?;
             0
         }
     };
@@ -872,6 +918,100 @@ async fn handle_run(
                         warn!("  Failed to inject time warp: {}", stderr.trim());
                     }
                     Err(e) => warn!("  Failed to inject time warp: {}", e),
+                }
+            }
+            "connect-error" => {
+                info!("🔌 Injecting connect-error on {}", target.name);
+                let container_name =
+                    format!("heisensim-fault-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let target_flag = format!(
+                    "--target={}",
+                    target
+                        .container_names
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or(&target.name)
+                );
+                let container_flag = format!("--container={}", container_name);
+                let duration_str = "15s".to_string();
+
+                let output = tokio::process::Command::new("kubectl")
+                    .args([
+                        "debug",
+                        "-n",
+                        &args.namespace,
+                        &target.name,
+                        "--image=ghcr.io/heisensim/heisensim:latest",
+                        &container_flag,
+                        &target_flag,
+                        "--",
+                        "heisensim-inject",
+                        "--pid",
+                        "1",
+                        "--fault",
+                        "connect-error",
+                        "--duration",
+                        &duration_str,
+                    ])
+                    .output()
+                    .await;
+
+                match output {
+                    Ok(o) if o.status.success() => {
+                        info!("  ✅ connect-error active for {}", duration_str);
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        warn!("  Failed to inject connect-error: {}", stderr.trim());
+                    }
+                    Err(e) => warn!("  Failed to inject connect-error: {}", e),
+                }
+            }
+            "fd-exhaustion" => {
+                info!("🔌 Injecting fd-exhaustion on {}", target.name);
+                let container_name =
+                    format!("heisensim-fault-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+                let target_flag = format!(
+                    "--target={}",
+                    target
+                        .container_names
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or(&target.name)
+                );
+                let container_flag = format!("--container={}", container_name);
+                let duration_str = "15s".to_string();
+
+                let output = tokio::process::Command::new("kubectl")
+                    .args([
+                        "debug",
+                        "-n",
+                        &args.namespace,
+                        &target.name,
+                        "--image=ghcr.io/heisensim/heisensim:latest",
+                        &container_flag,
+                        &target_flag,
+                        "--",
+                        "heisensim-inject",
+                        "--pid",
+                        "1",
+                        "--fault",
+                        "fd-exhaustion",
+                        "--duration",
+                        &duration_str,
+                    ])
+                    .output()
+                    .await;
+
+                match output {
+                    Ok(o) if o.status.success() => {
+                        info!("  ✅ fd-exhaustion active for {}", duration_str);
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        warn!("  Failed to inject fd-exhaustion: {}", stderr.trim());
+                    }
+                    Err(e) => warn!("  Failed to inject fd-exhaustion: {}", e),
                 }
             }
             other => {
@@ -2192,6 +2332,76 @@ async fn handle_time_warp(args: TimeWarpArgs) -> Result<()> {
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Failed to inject time warp: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Handle the `process-fault` subcommand — inject process-level faults via ptrace.
+///
+/// Uses `kubectl debug` to inject an ephemeral container with `CAP_SYS_PTRACE`,
+/// then runs `heisensim-inject --fault <type>` inside it to intercept syscalls.
+async fn handle_process_fault(args: ProcessFaultArgs) -> Result<()> {
+    let fault_str = match args.fault {
+        ProcessFaultType::ConnectError => "connect-error",
+        ProcessFaultType::FdExhaustion => "fd-exhaustion",
+    };
+
+    info!(
+        "🔌 Process fault: pod={}, ns={}, fault={}, duration={}",
+        args.pod, args.namespace, fault_str, args.duration
+    );
+
+    // Build inject args
+    let container_name = format!("heisensim-fault-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let target_container = args.container.as_deref().unwrap_or(&args.pod);
+    let target_flag = format!("--target={}", target_container);
+    let container_flag = format!("--container={}", container_name);
+    let errno_str = args.errno.to_string();
+
+    let mut cmd_args = vec![
+        "debug",
+        "-n",
+        &args.namespace,
+        &args.pod,
+        "--image=ghcr.io/heisensim/heisensim:latest",
+        &container_flag,
+        &target_flag,
+        "--",
+        "heisensim-inject",
+        "--pid",
+        "1",
+        "--fault",
+        fault_str,
+        "--duration",
+        &args.duration,
+        "--errno",
+        &errno_str,
+    ];
+
+    let port_str;
+    if let Some(port) = args.port {
+        port_str = port.to_string();
+        cmd_args.push("--port");
+        cmd_args.push(&port_str);
+    }
+
+    info!("🚀 Launching ephemeral container with CAP_SYS_PTRACE...");
+
+    let output = tokio::process::Command::new("kubectl")
+        .args(&cmd_args)
+        .output()
+        .await?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        info!("✅ Process fault injection complete");
+        if !stdout.is_empty() {
+            println!("{}", stdout);
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to inject process fault: {}", stderr.trim());
     }
 
     Ok(())
