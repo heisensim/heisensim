@@ -1,6 +1,6 @@
 use crate::dst::{DstConfig, DstResult};
 use crate::{FaultProfile, OutputFormat};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use heisensim_core::types::VirtualTime;
 
@@ -45,6 +45,10 @@ pub struct SimulateArgs {
     /// Path to heisensim.toml config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    property_template: Option<crate::properties::PropertyTemplate>,
 }
 
 pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
@@ -61,11 +65,22 @@ pub async fn handle_simulate(args: SimulateArgs) -> Result<i32> {
     // Resolve faults from profile
     let resolved_faults = crate::resolve_faults(&args.faults, args.profile.as_ref());
 
-    let property_defs = if let Some(ref config_path) = args.config {
-        crate::properties::load_and_validate(config_path)?
-    } else {
-        Vec::new()
-    };
+    let property_defs: Vec<crate::properties::PropertyDef> =
+        if let Some(ref config_path) = args.config {
+            let config_str =
+                std::fs::read_to_string(config_path).context("Failed to read config file")?;
+            let config: crate::properties::PropertiesConfig =
+                toml::from_str(&config_str).context("Failed to parse properties config")?;
+            crate::properties::resolve_with_template(
+                args.property_template.as_ref(),
+                &config.properties,
+                config.template.as_ref(),
+            )
+        } else if let Some(ref tmpl) = args.property_template {
+            tmpl.to_property_defs()
+        } else {
+            Vec::new()
+        };
 
     let config = DstConfig {
         seed,

@@ -1,5 +1,5 @@
 use crate::{DiffArgs, OutputFormat, parse_duration, parse_seed, resolve_faults};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use heisensim_core::types::VirtualTime;
 use heisensim_timeline::event::{EventKind, TimelineEvent};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,11 +12,22 @@ pub async fn handle_diff(args: DiffArgs) -> Result<i32> {
     let warmup = parse_duration(&args.warmup)?;
     let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
 
-    let property_defs = if let Some(ref config_path) = args.config {
-        crate::properties::load_and_validate(config_path)?
-    } else {
-        Vec::new()
-    };
+    let property_defs: Vec<crate::properties::PropertyDef> =
+        if let Some(ref config_path) = args.config {
+            let config_str =
+                std::fs::read_to_string(config_path).context("Failed to read config file")?;
+            let config: crate::properties::PropertiesConfig =
+                toml::from_str(&config_str).context("Failed to parse properties config")?;
+            crate::properties::resolve_with_template(
+                args.property_template.as_ref(),
+                &config.properties,
+                config.template.as_ref(),
+            )
+        } else if let Some(ref tmpl) = args.property_template {
+            tmpl.to_property_defs()
+        } else {
+            Vec::new()
+        };
 
     let config_a = crate::dst::DstConfig {
         seed: seed_a,

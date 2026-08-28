@@ -137,6 +137,10 @@ pub struct DiffArgs {
     /// Output format
     #[arg(long, default_value = "text")]
     pub output: OutputFormat,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    pub property_template: Option<properties::PropertyTemplate>,
 }
 
 #[derive(Args, Debug)]
@@ -285,6 +289,10 @@ struct RunArgs {
     /// Fault profile preset. Overrides --faults when set.
     #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    property_template: Option<properties::PropertyTemplate>,
 }
 
 /// Fault profile presets.
@@ -477,6 +485,10 @@ struct ExploreArgs {
     /// Fault profile preset. Overrides --faults when set.
     #[arg(long, value_enum, conflicts_with = "faults")]
     profile: Option<FaultProfile>,
+
+    /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
+    #[arg(long, value_enum)]
+    property_template: Option<properties::PropertyTemplate>,
 }
 
 #[derive(Args, Debug)]
@@ -686,6 +698,23 @@ async fn handle_run(
     // Parse durations
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
+
+    // Parse property config early — fail before cluster creation on bad TOML
+    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
+    } else {
+        Vec::new()
+    };
 
     // Create K3d cluster if requested
     if args.k3d {
@@ -1046,25 +1075,20 @@ async fn handle_run(
     std::fs::write(&json_path, &json)?;
     info!("Timeline saved to {}", json_path);
 
-    // Property checking
+    // Property checking (defs were parsed early, before cluster creation)
     let mut exit_code = 0;
     let mut verdicts = Vec::new();
-    if let Some(ref config_path) = args.config {
-        let config_str =
-            std::fs::read_to_string(config_path).context("Failed to read config file")?;
-        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
-        if !config.properties.is_empty() {
-            info!("Evaluating {} properties...", config.properties.len());
-            let checker = properties::build_checker(&config.properties)?;
-            verdicts = checker.evaluate_all(&final_events);
-            let all_passed = verdicts.iter().all(|v| v.passed);
-            if args.output == OutputFormat::Text {
-                properties::print_verdicts(&verdicts);
-            }
-            if !all_passed {
-                warn!("Some properties FAILED. Exit code 1.");
-                exit_code = 1;
-            }
+    if !property_defs.is_empty() {
+        info!("Evaluating {} properties...", property_defs.len());
+        let checker = properties::build_checker(&property_defs)?;
+        verdicts = checker.evaluate_all(&final_events);
+        let all_passed = verdicts.iter().all(|v| v.passed);
+        if args.output == OutputFormat::Text {
+            properties::print_verdicts(&verdicts);
+        }
+        if !all_passed {
+            warn!("Some properties FAILED. Exit code 1.");
+            exit_code = 1;
         }
     }
 
@@ -1780,8 +1804,15 @@ async fn handle_explore(args: ExploreArgs) -> Result<i32> {
     let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
         let config_str =
             std::fs::read_to_string(config_path).context("Failed to read config file")?;
-        let config: properties::PropertiesConfig = toml::from_str(&config_str).unwrap_or_default();
-        config.properties
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
     } else {
         Vec::new()
     };
@@ -2041,8 +2072,18 @@ async fn handle_simulate_explore(args: &ExploreArgs) -> Result<i32> {
     let resolved_faults = resolve_faults(&args.faults, args.profile.as_ref());
 
     // Load and validate property definitions
-    let property_defs = if let Some(ref config_path) = args.config {
-        properties::load_and_validate(config_path)?
+    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
     } else {
         Vec::new()
     };
