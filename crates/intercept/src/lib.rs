@@ -14,6 +14,7 @@
 //! See [`ptrace`] and [`seccomp`] modules.
 
 pub mod handler;
+pub mod process;
 pub mod ptrace;
 pub mod seccomp;
 pub mod syscall;

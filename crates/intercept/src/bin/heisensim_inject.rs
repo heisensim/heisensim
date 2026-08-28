@@ -17,8 +17,13 @@ use clap::Parser;
 #[command(name = "heisensim-inject", version, about)]
 struct Cli {
     /// Target process ID to inject into.
-    #[arg(long)]
-    pid: u32,
+    #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+    pid: Option<u32>,
+
+    /// Target process by name (resolved via /proc or pgrep).
+    /// Errors if zero or multiple processes match.
+    #[arg(long, required_unless_present = "pid", conflicts_with = "pid")]
+    name: Option<String>,
 
     /// Time offset to apply (e.g., "+30d", "-2h", "+90m", "+3600s").
     #[arg(long, required_unless_present_any = ["revert", "fault"])]
@@ -77,24 +82,28 @@ fn main() -> Result<()> {
         .with_target(false)
         .init();
 
+    // Resolve PID from --pid or --name
+    let pid = match (cli.pid, &cli.name) {
+        (Some(p), _) => p,
+        (None, Some(name)) => {
+            let resolved = heisensim_intercept::process::find_pid_by_name(name)?;
+            tracing::info!(name, pid = resolved, "resolved process name to PID");
+            resolved
+        }
+        (None, None) => anyhow::bail!("either --pid or --name is required"),
+    };
+
     if cli.revert {
-        return revert_injection(cli.pid);
+        return revert_injection(pid);
     }
 
     if let Some(fault) = cli.fault {
-        return run_fault_injection(
-            cli.pid,
-            fault,
-            cli.errno,
-            &cli.duration,
-            cli.port,
-            cli.latency,
-        );
+        return run_fault_injection(pid, fault, cli.errno, &cli.duration, cli.port, cli.latency);
     }
 
     let offset = cli.offset.as_deref().unwrap_or("+0s");
 
-    inject(cli.pid, offset, &cli.speed)
+    inject(pid, offset, &cli.speed)
 }
 
 fn parse_duration(s: &str) -> Result<std::time::Duration> {
