@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-08-28
+
+### Added
+- **Process-Level Fault Injection** (`heisensim process-fault`): Attach to running processes
+  via ptrace, intercept syscalls, and inject faults — no containers or kernel modules required
+  - `connect-error`: Block `connect()` with configurable errno (e.g. ECONNREFUSED)
+  - `fd-exhaustion`: Block `socket()` with EMFILE (too many open files)
+  - `connect-latency`: Delay `connect()` by N milliseconds, then allow
+- **Multi-Thread Tracing**: Automatically traces all threads in multi-threaded processes
+  (Go goroutines, Tokio workers, JVM thread pools) via `/proc/PID/task/` enumeration
+  and `PTRACE_O_TRACECLONE` — no threads escape fault injection
+- **Port Filtering** (`--port`): Target specific connections by destination port.
+  Reads `sockaddr` from process memory via `PTRACE_PEEKDATA`. Fault only Postgres on 5432
+  without breaking DNS on 53 or Redis on 6379
+- **Connect Latency** (`--fault connect-latency --latency 200`): Add realistic latency to
+  `connect()` syscalls via ptrace — models slow network handshakes
+- **Property Templates** (`--property-template`): Pre-built SLA property bundles —
+  `basic`, `three-nines`, `four-nines`, `ci`, `microservice`, `stateful`. Eliminates
+  boilerplate for common SLA configurations
+- **Deadline-Aware Waitpid**: `--duration` now reliably exits even when the target process
+  is idle (e.g. sitting in `epoll_wait`). Uses non-blocking `WNOHANG` polling with 10ms
+  idle backoff
+
+### Fixed
+- `--duration` no longer hangs forever if target process is idle
+- Property config is now parsed _before_ k3d cluster creation (fail fast on bad TOML)
+- Malformed property TOML now returns an error instead of silently using defaults
+- `--latency` flag is now correctly forwarded to `heisensim-inject` subprocess
+- `--port` + `--fault fd-exhaustion` is rejected at CLI level (socket has no destination port)
+- Errno validation: `heisensim-inject` rejects values outside 1..=4095
+- Unused import warning in tracer tests on Linux CI
+
+## [0.11.0] - 2026-08-25
+
+### Added
+- **vDSO Time Manipulation** (`heisensim time-warp`): Override `clock_gettime` and
+  `gettimeofday` in running processes by patching the kernel's vDSO trampoline.
+  Supports speed multipliers (`--speed 2.0`) and time offsets (`--offset +1h`)
+- **Time Control Architecture**: Shared memory `TimeControl` struct with `InjectionHandle`
+  for deterministic time injection across vDSO and ptrace paths
+- ELF parser for vDSO symbol resolution
+- x86_64 and aarch64 trampoline code generation
+- `/proc/PID/maps` parser for vDSO address discovery
+
 ## [0.10.0] - 2026-08-22
 
 ### Added
@@ -96,6 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew tap installation
 - GitHub Actions CI/CD
 
+[0.12.0]: https://github.com/heisensim/heisensim/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/heisensim/heisensim/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/heisensim/heisensim/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/heisensim/heisensim/compare/v0.7.0...v0.9.0
 [0.7.0]: https://github.com/heisensim/heisensim/compare/v0.6.0...v0.7.0

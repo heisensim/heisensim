@@ -62,7 +62,7 @@ Download from [GitHub Releases](https://github.com/heisensim/heisensim/releases)
 ### Docker
 
 ```bash
-docker run ghcr.io/heisensim/heisensim:v0.10.0 simulate --seed 0x42 --duration 5m
+docker run ghcr.io/heisensim/heisensim:v0.12.0 simulate --seed 0x42 --duration 5m
 ```
 
 ### GitHub Action
@@ -183,6 +183,11 @@ Properties produce verdicts with details:
 - **Seed diff** — compare two seeds side-by-side (`heisensim diff`)
 - **Init presets** — battle-tested configs for microservices, stateful workloads, and CI
 - **CI-native** — GitHub Action, GitLab CI template, JUnit XML, JSON output
+- **Process-Level Fault Injection** — `heisensim process-fault` attaches to running processes via ptrace, intercepts syscalls, and injects faults without containers or kernels modules
+- **Multi-Thread Tracing** — Automatically traces all threads (Go goroutines, Tokio workers, JVM thread pools) via `/proc/PID/task/` enumeration and `PTRACE_O_TRACECLONE`
+- **Port Filtering** — `--port 5432` reads sockaddr from process memory to target specific connections (e.g. fault Postgres without breaking DNS)
+- **Connect Latency** — `--fault connect-latency --latency 200` adds realistic latency to `connect()` calls
+- **Property Templates** — `--property-template three-nines` loads pre-built SLA property bundles
 
 ---
 
@@ -325,6 +330,17 @@ Re-run a previous test with identical fault sequence:
 heisensim replay --seed 42 --namespace demo
 ```
 
+### `heisensim process-fault`
+
+```bash
+heisensim process-fault --pid 1234 --fault connect-error --errno 111 --duration 30s
+heisensim process-fault --pid 1234 --fault fd-exhaustion --duration 10s
+heisensim process-fault --pid 1234 --fault connect-latency --latency 200 --port 5432 --duration 60s
+```
+
+Flags: `--pid`, `--fault` (connect-error|fd-exhaustion|connect-latency), `--errno`, `--latency`, `--port`, `--duration`.
+Notes: Requires Linux x86_64. Attaches to all threads automatically. `--port` cannot be combined with `fd-exhaustion`.
+
 ---
 
 ## 🔌 CI Integration
@@ -391,9 +407,10 @@ heisensim/
 
 ## 🗺️ Roadmap
 
-- **v0.10.0 ✅**: DST engine, property checking, seed bisection & diff, init presets, GitHub Action, GitLab CI template, VHS demo
-- **Next**: docs site (mdbook), Grafana observability dashboard, Diverge integration (preview env chaos testing)
-- **Future**: Process-level determinism via vDSO trampoline — the deep moat
+- `v0.10.0` ✅ Explore, bisect, diff, init presets, CI integration
+- `v0.11.0` ✅ vDSO time manipulation, process fault injection engine
+- `v0.12.0` ✅ Property templates, connect-latency, port filtering, multi-thread tracing
+- Future: mdbook docs, Grafana dashboard, Diverge × heisensim integration
 
 ---
 
