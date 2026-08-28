@@ -195,6 +195,10 @@ pub struct ProcessFaultArgs {
     /// Container name within the pod (defaults to first container)
     #[arg(long)]
     pub container: Option<String>,
+
+    /// Latency in milliseconds for connect-latency (default: 200ms)
+    #[arg(long, default_value = "200")]
+    pub latency: u64,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
@@ -2436,6 +2440,12 @@ async fn handle_process_fault(args: ProcessFaultArgs) -> Result<()> {
         port_str = port.to_string();
         cmd_args.push("--port");
         cmd_args.push(&port_str);
+    }
+
+    let latency_str = args.latency.to_string();
+    if matches!(args.fault, ProcessFaultType::ConnectLatency) {
+        cmd_args.push("--latency");
+        cmd_args.push(&latency_str);
     }
 
     info!("🚀 Launching ephemeral container with CAP_SYS_PTRACE...");
