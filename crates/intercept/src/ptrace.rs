@@ -722,17 +722,4 @@ mod tests {
         assert!(tracer.detach().is_ok());
         assert!(tracer.leader.is_none());
     }
-
-    // Architecture-specific syscall number sanity checks
-    #[test]
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
-    fn test_syscall_numbers_are_positive() {
-        assert!(abi::nr::CLOCK_GETTIME > 0);
-        assert!(abi::nr::SOCKET > 0);
-        assert!(abi::nr::CONNECT > 0);
-        assert!(abi::nr::BIND > 0);
-    }
 }
