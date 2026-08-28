@@ -46,15 +46,18 @@ fn run_loop(
     duration: Duration,
     start: Instant,
 ) -> Result<()> {
+    let deadline = start + duration;
     loop {
-        if start.elapsed() >= duration {
-            tracing::info!("duration expired, stopping");
-            return Ok(());
+        match tracer.wait_for_syscall(Some(deadline))? {
+            Some(syscall) => {
+                let result = handler.handle(syscall);
+                tracer.set_result(result)?;
+            }
+            None => {
+                tracing::info!("duration expired, stopping");
+                return Ok(());
+            }
         }
-
-        let syscall = tracer.wait_for_syscall()?;
-        let result = handler.handle(syscall);
-        tracer.set_result(result)?;
     }
 }
 

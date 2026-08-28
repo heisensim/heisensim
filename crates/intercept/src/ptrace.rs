@@ -41,36 +41,58 @@ impl PtraceTracer {
     }
 
     /// Wait for the target process to enter a syscall, and return the parsed syscall.
+    ///
+    /// If `deadline` is `Some`, returns `Ok(None)` when the deadline expires without
+    /// a syscall stop. Uses non-blocking `WNOHANG` polling with idle backoff.
+    /// If `deadline` is `None`, blocks until the next syscall (legacy behavior for vDSO).
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
+    pub fn wait_for_syscall(
+        &mut self,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Option<InterceptedSyscall>> {
         use nix::sys::{
             ptrace,
-            wait::{WaitStatus, waitpid},
+            wait::{WaitPidFlag, WaitStatus, waitpid},
         };
 
         let pid = self
             .pid
             .ok_or_else(|| anyhow::anyhow!("no process attached"))?;
 
-        loop {
-            // Resume until next syscall entry
-            ptrace::syscall(pid, None)?;
+        // Resume until next syscall entry
+        ptrace::syscall(pid, None)?;
 
-            match waitpid(pid, None)? {
+        loop {
+            // Check deadline before waiting
+            if let Some(d) = deadline {
+                if std::time::Instant::now() >= d {
+                    return Ok(None);
+                }
+            }
+
+            // Use WNOHANG when we have a deadline, blocking wait otherwise
+            let wait_flags = if deadline.is_some() {
+                Some(WaitPidFlag::WNOHANG)
+            } else {
+                None
+            };
+
+            match waitpid(pid, wait_flags)? {
+                WaitStatus::StillAlive => {
+                    // Target is idle — back off briefly before polling again
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
                 WaitStatus::PtraceSyscall(_) => {
-                    // This is a syscall stop — read registers
+                    // Syscall stop — read registers below
                     break;
                 }
                 WaitStatus::Stopped(_, sig) => {
-                    // Signal-delivery stop — forward the signal and let the
-                    // loop's next iteration pick up the resulting stop.
-                    // We do NOT call waitpid here; the next ptrace::syscall +
-                    // waitpid at the top of the loop handles it correctly.
+                    // Signal-delivery stop — forward the signal and wait again
                     ptrace::syscall(pid, Some(sig))?;
-                    // Skip the ptrace::syscall(None) at the top of the next
-                    // iteration — we already resumed. Go directly to waitpid.
-                    match waitpid(pid, None)? {
+                    match waitpid(pid, wait_flags)? {
                         WaitStatus::PtraceSyscall(_) => break,
+                        WaitStatus::StillAlive => continue,
                         WaitStatus::Signaled(_, sig, _) => {
                             anyhow::bail!("traced process killed by signal {:?}", sig);
                         }
@@ -87,7 +109,6 @@ impl PtraceTracer {
                     anyhow::bail!("traced process exited with code {}", code);
                 }
                 status => {
-                    // Other statuses (continued, etc.) — retry
                     tracing::debug!(?status, "unexpected wait status, retrying");
                     continue;
                 }
@@ -136,12 +157,15 @@ impl PtraceTracer {
             nr => InterceptedSyscall::Unknown { syscall_nr: nr },
         };
 
-        Ok(syscall)
+        Ok(Some(syscall))
     }
 
     /// Wait stub for non-x86_64-Linux.
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    pub fn wait_for_syscall(&mut self) -> Result<InterceptedSyscall> {
+    pub fn wait_for_syscall(
+        &mut self,
+        _deadline: Option<std::time::Instant>,
+    ) -> Result<Option<InterceptedSyscall>> {
         anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
     }
 }
@@ -281,7 +305,7 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     fn test_wait_for_syscall_non_linux_errors() {
         let mut tracer = PtraceTracer::new();
-        let result = tracer.wait_for_syscall();
+        let result = tracer.wait_for_syscall(None);
         assert!(result.is_err());
         assert!(
             result
