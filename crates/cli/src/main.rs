@@ -653,6 +653,23 @@ async fn handle_run(
     let duration = parse_duration(&args.duration)?;
     let warmup = parse_duration(&args.warmup)?;
 
+    // Parse property config early — fail before cluster creation on bad TOML
+    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
+        let config_str =
+            std::fs::read_to_string(config_path).context("Failed to read config file")?;
+        let config: properties::PropertiesConfig =
+            toml::from_str(&config_str).context("Failed to parse properties config")?;
+        properties::resolve_with_template(
+            args.property_template.as_ref(),
+            &config.properties,
+            config.template.as_ref(),
+        )
+    } else if let Some(ref tmpl) = args.property_template {
+        tmpl.to_property_defs()
+    } else {
+        Vec::new()
+    };
+
     // Create K3d cluster if requested
     if args.k3d {
         info!("Creating ephemeral K3d cluster...");
@@ -918,24 +935,9 @@ async fn handle_run(
     std::fs::write(&json_path, &json)?;
     info!("Timeline saved to {}", json_path);
 
-    // Property checking
+    // Property checking (defs were parsed early, before cluster creation)
     let mut exit_code = 0;
     let mut verdicts = Vec::new();
-    let property_defs: Vec<properties::PropertyDef> = if let Some(ref config_path) = args.config {
-        let config_str =
-            std::fs::read_to_string(config_path).context("Failed to read config file")?;
-        let config: properties::PropertiesConfig =
-            toml::from_str(&config_str).context("Failed to parse properties config")?;
-        properties::resolve_with_template(
-            args.property_template.as_ref(),
-            &config.properties,
-            config.template.as_ref(),
-        )
-    } else if let Some(ref tmpl) = args.property_template {
-        tmpl.to_property_defs()
-    } else {
-        Vec::new()
-    };
     if !property_defs.is_empty() {
         info!("Evaluating {} properties...", property_defs.len());
         let checker = properties::build_checker(&property_defs)?;
