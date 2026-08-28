@@ -19,7 +19,7 @@ use std::collections::HashMap;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod abi {
-    //! Architecture-specific syscall numbers and register accessors.
+    // Architecture-specific syscall numbers and register accessors.
 
     use super::*;
 
