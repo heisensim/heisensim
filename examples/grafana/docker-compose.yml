@@ -4,7 +4,7 @@
 # Usage:
 #   docker compose up -d
 #   heisensim run --otel-endpoint http://localhost:4318 ...
-#   open http://localhost:3000  # → pre-loaded dashboard
+#   open http://localhost:3000  # → pre-loaded dashboard (admin/heisensim)
 
 services:
   otel-collector:
@@ -12,15 +12,15 @@ services:
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
     ports:
-      - "4318:4318"   # OTLP HTTP (heisensim sends here)
-      - "8889:8889"   # Prometheus metrics endpoint
+      - "127.0.0.1:4318:4318"   # OTLP HTTP (heisensim sends here)
+      - "127.0.0.1:8889:8889"   # Prometheus metrics endpoint
 
   prometheus:
     image: prom/prometheus:v3.3.1
     volumes:
       - ./prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     depends_on:
       - otel-collector
 
@@ -30,20 +30,20 @@ services:
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml
     ports:
-      - "3200:3200"   # Tempo HTTP API
+      - "127.0.0.1:3200:3200"   # Tempo HTTP API
 
   grafana:
     image: grafana/grafana:11.6.0
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=heisensim
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-heisensim}
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       - ./provisioning:/etc/grafana/provisioning
       - ./heisensim-dashboard.json:/var/lib/grafana/dashboards/heisensim.json
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
       - tempo

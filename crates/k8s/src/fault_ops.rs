@@ -505,10 +505,11 @@ impl FaultOperator {
 
             if let Err(e) = op.exec_network_command(&ns, &pn, &command).await {
                 warn!(pod = pn.as_str(), error = %e, "Failed to inject stress");
+            } else {
+                record_fault_reverted("stress", &pn);
             }
 
             op.timeline.emit(EventKind::FaultReverted { fault_id });
-            record_fault_reverted("stress", &pn);
             info!(pod = pn.as_str(), "Stress completed");
         });
 
