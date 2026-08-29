@@ -54,24 +54,42 @@ impl ProbeRunner {
                                 ProbeConfig::Exec(c) => check_exec(c).await,
                             };
 
-                            let event_kind = if result.success {
-                                EventKind::ProbeSuccess {
+                            let (event_kind, status_label) = if result.success {
+                                (EventKind::ProbeSuccess {
                                     probe_name: name.clone(),
                                     latency_ms: result.latency.as_millis() as u64,
                                     status_code: result.status_code,
-                                }
+                                }, "success")
                             } else if result.error.as_deref().unwrap_or("").contains("timed out") || result.error.as_deref().unwrap_or("").contains("timeout") {
-                                EventKind::ProbeTimeout {
+                                (EventKind::ProbeTimeout {
                                     probe_name: name.clone(),
                                     timeout_ms: result.latency.as_millis() as u64,
-                                }
+                                }, "timeout")
                             } else {
-                                EventKind::ProbeFailed {
+                                (EventKind::ProbeFailed {
                                     probe_name: name.clone(),
                                     error: result.error.clone().unwrap_or_default(),
                                     latency_ms: Some(result.latency.as_millis() as u64),
-                                }
+                                }, "failure")
                             };
+
+                            // Streaming OTel metrics (no-op if no --otel-endpoint)
+                            let meter = opentelemetry::global::meter("heisensim");
+                            let latency_hist = meter
+                                .f64_histogram("heisensim.probe.latency_ms")
+                                .with_description("Probe latency in milliseconds")
+                                .build();
+                            let probe_counter = meter
+                                .u64_counter("heisensim.probe.count")
+                                .with_description("Probe execution count by status")
+                                .build();
+
+                            let attrs = [
+                                opentelemetry::KeyValue::new("probe", name.clone()),
+                                opentelemetry::KeyValue::new("status", status_label),
+                            ];
+                            latency_hist.record(result.latency.as_secs_f64() * 1000.0, &attrs);
+                            probe_counter.add(1, &attrs);
 
                             timeline.emit(event_kind);
                         }

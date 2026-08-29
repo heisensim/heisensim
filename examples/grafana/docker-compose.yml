@@ -1,0 +1,49 @@
+# Heisensim Observability Stack
+# One command: docker compose up → Grafana at http://localhost:3000
+#
+# Usage:
+#   docker compose up -d
+#   heisensim run --otel-endpoint http://localhost:4318 ...
+#   open http://localhost:3000  # → pre-loaded dashboard
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.0
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - "4318:4318"   # OTLP HTTP (heisensim sends here)
+      - "8889:8889"   # Prometheus metrics endpoint
+
+  prometheus:
+    image: prom/prometheus:v3.3.1
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"   # Tempo HTTP API
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=heisensim
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning
+      - ./heisensim-dashboard.json:/var/lib/grafana/dashboards/heisensim.json
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
