@@ -1,0 +1,325 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+        "enable": true,
+        "expr": "increase(heisensim_fault_injected_total[1m]) > 0",
+        "iconColor": "red",
+        "name": "Fault Injected",
+        "titleFormat": "{{fault_kind}} → {{target}}"
+      },
+      {
+        "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+        "enable": true,
+        "expr": "increase(heisensim_fault_reverted_total[1m]) > 0",
+        "iconColor": "green",
+        "name": "Fault Reverted",
+        "titleFormat": "Reverted: {{fault_kind}} → {{target}}"
+      }
+    ]
+  },
+  "description": "Real-time observability for heisensim chaos experiments. Tracks probe health, fault injection lifecycle, and property verdicts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "icon": "external link",
+      "tags": [],
+      "title": "heisensim docs",
+      "type": "link",
+      "url": "https://heisensim.dev"
+    }
+  ],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(heisensim_fault_injected_total)",
+          "legendFormat": "Total Faults"
+        }
+      ],
+      "title": "Faults Injected",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 50 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["last"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "100 * sum(rate(heisensim_probe_count{status=\"success\"}[5m])) / sum(rate(heisensim_probe_count[5m]))",
+          "legendFormat": "Success Rate"
+        }
+      ],
+      "title": "Probe Success Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(heisensim_probe_count)",
+          "legendFormat": "Total Probes"
+        }
+      ],
+      "title": "Total Probe Checks",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(heisensim_properties_failed)",
+          "legendFormat": "Failed"
+        }
+      ],
+      "title": "Properties Failed",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 10,
+      "title": "Probe Health",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["mean", "max", "lastNotNull"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(heisensim_probe_latency_ms_bucket{status=\"success\"}[1m])) by (le, probe))",
+          "legendFormat": "{{probe}} p50"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(heisensim_probe_latency_ms_bucket{status=\"success\"}[1m])) by (le, probe))",
+          "legendFormat": "{{probe}} p95"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(heisensim_probe_latency_ms_bucket{status=\"success\"}[1m])) by (le, probe))",
+          "legendFormat": "{{probe}} p99"
+        }
+      ],
+      "title": "Probe Latency (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal" }
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(rate(heisensim_probe_count{status=\"success\"}[1m])) by (probe)",
+          "legendFormat": "{{probe}} ✓"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(rate(heisensim_probe_count{status=\"failure\"}[1m])) by (probe)",
+          "legendFormat": "{{probe}} ✗"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(rate(heisensim_probe_count{status=\"timeout\"}[1m])) by (probe)",
+          "legendFormat": "{{probe}} ⏱"
+        }
+      ],
+      "title": "Probe Results (success / failure / timeout)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 20,
+      "title": "Fault Injection",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal" }
+          }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 15 },
+      "id": 21,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(increase(heisensim_fault_injected_total[1m])) by (fault_kind)",
+          "legendFormat": "{{fault_kind}}"
+        }
+      ],
+      "title": "Fault Injections by Kind",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "stacking": { "mode": "normal" }
+          }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 15 },
+      "id": 22,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "sum(increase(heisensim_fault_injected_total[1m])) by (target)",
+          "legendFormat": "{{target}}"
+        }
+      ],
+      "title": "Fault Injections by Target",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 30,
+      "title": "Property Verdicts",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "mappings": [{ "options": { "0": { "text": "PASS", "color": "green" }, "1": { "text": "FAIL", "color": "red" } }, "type": "value" }],
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 22 },
+      "id": 31,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "heisensim_property_checks{result=\"fail\"}",
+          "legendFormat": "{{property}}"
+        }
+      ],
+      "title": "Property Verdicts",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 22 },
+      "id": 32,
+      "options": { "reduceOptions": { "calcs": ["last"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "heisensim-prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(heisensim_run_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95 Run Duration"
+        }
+      ],
+      "title": "Run Duration (p95)",
+      "type": "stat"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["heisensim", "chaos-engineering", "reliability"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Heisensim — Chaos Experiment Dashboard",
+  "uid": "heisensim-chaos",
+  "version": 1
+}

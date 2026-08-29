@@ -592,6 +592,11 @@ async fn main() -> Result<()> {
             endpoint = endpoint.as_str(),
             "OpenTelemetry tracing and metrics enabled"
         );
+
+        // Set global meter provider so any crate can emit streaming metrics
+        // via opentelemetry::global::meter("heisensim") — no-op if not set.
+        opentelemetry::global::set_meter_provider(meter_provider.clone());
+
         Some((provider, meter_provider))
     } else {
         tracing_subscriber::registry()

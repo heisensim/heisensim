@@ -27,6 +27,39 @@ pub struct FaultOperator {
     inject_method: InjectMethod,
 }
 
+/// Record a fault injection metric via the global OTel meter.
+/// No-op if no `--otel-endpoint` is configured.
+fn record_fault_injected(fault_kind: &str, target: &str) {
+    let meter = opentelemetry::global::meter("heisensim");
+    let counter = meter
+        .u64_counter("heisensim.fault.injected_total")
+        .with_description("Total fault injections by kind and target")
+        .build();
+    counter.add(
+        1,
+        &[
+            opentelemetry::KeyValue::new("fault_kind", fault_kind.to_string()),
+            opentelemetry::KeyValue::new("target", target.to_string()),
+        ],
+    );
+}
+
+/// Record a fault revert metric via the global OTel meter.
+fn record_fault_reverted(fault_kind: &str, target: &str) {
+    let meter = opentelemetry::global::meter("heisensim");
+    let counter = meter
+        .u64_counter("heisensim.fault.reverted_total")
+        .with_description("Total fault reverts by kind and target")
+        .build();
+    counter.add(
+        1,
+        &[
+            opentelemetry::KeyValue::new("fault_kind", fault_kind.to_string()),
+            opentelemetry::KeyValue::new("target", target.to_string()),
+        ],
+    );
+}
+
 impl FaultOperator {
     /// Create a new fault operator.
     pub fn new(client: Client, timeline: TimelineHandle) -> Self {
@@ -83,9 +116,10 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "pod_crash".to_string(),
-            target,
+            target: target.clone(),
             duration_secs: None,
         });
+        record_fault_injected("pod_crash", &target);
 
         Ok(fault_id)
     }
@@ -101,6 +135,7 @@ impl FaultOperator {
             target: pod_name.to_string(),
             duration_secs: None,
         });
+        record_fault_injected("eviction", pod_name);
 
         use kube::api::EvictParams;
 
@@ -118,6 +153,7 @@ impl FaultOperator {
                     namespace, pod_name, err_resp.code, err_resp.message
                 );
                 self.timeline.emit(EventKind::FaultReverted { fault_id });
+                record_fault_reverted("eviction", pod_name);
                 Ok((fault_id, false))
             }
             Err(e) => Err(anyhow::anyhow!("Failed to evict pod {}: {}", pod_name, e)),
@@ -286,9 +322,10 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "network_latency".to_string(),
-            target,
+            target: target.clone(),
             duration_secs: Some(duration_secs),
         });
+        record_fault_injected("network_latency", &target);
 
         // Spawn background task to revert after duration
         let client_clone = self.client.clone();
@@ -325,6 +362,7 @@ impl FaultOperator {
         .await?;
 
         self.timeline.emit(EventKind::FaultReverted { fault_id });
+        record_fault_reverted("network_latency", pod_name);
         info!(pod = pod_name, "Reverted network latency");
         Ok(())
     }
@@ -361,9 +399,10 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "network_partition".to_string(),
-            target,
+            target: target.clone(),
             duration_secs: Some(duration_secs),
         });
+        record_fault_injected("network_partition", &target);
 
         // Spawn background task to revert
         let client_clone = self.client.clone();
@@ -402,6 +441,7 @@ impl FaultOperator {
         .await?;
 
         self.timeline.emit(EventKind::FaultReverted { fault_id });
+        record_fault_reverted("network_partition", pod_name);
         info!(pod = pod_name, target = target_ip, "Reverted partition");
         Ok(())
     }
@@ -431,9 +471,10 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "stress".to_string(),
-            target,
+            target: target.clone(),
             duration_secs: Some(duration_secs),
         });
+        record_fault_injected("stress", &target);
         drop(_guard); // Drop span before async spawn setup
 
         let client_clone = self.client.clone();
@@ -464,6 +505,8 @@ impl FaultOperator {
 
             if let Err(e) = op.exec_network_command(&ns, &pn, &command).await {
                 warn!(pod = pn.as_str(), error = %e, "Failed to inject stress");
+            } else {
+                record_fault_reverted("stress", &pn);
             }
 
             op.timeline.emit(EventKind::FaultReverted { fault_id });
@@ -530,9 +573,10 @@ impl FaultOperator {
         self.timeline.emit(EventKind::FaultInjected {
             fault_id,
             fault_kind: "dns_failure".to_string(),
-            target,
+            target: target.clone(),
             duration_secs: Some(duration_secs),
         });
+        record_fault_injected("dns_failure", &target);
 
         let client_clone = self.client.clone();
         let timeline_clone = self.timeline.clone();
@@ -595,6 +639,7 @@ impl FaultOperator {
             return Err(errs.remove(0).context("Failed to revert DNS failure rules"));
         }
 
+        record_fault_reverted("dns_failure", pod_name);
         Ok(())
     }
 }
