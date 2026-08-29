@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-08-29
+
+### Added
+- **`--name` Process Targeting**: Target processes by name instead of PID —
+  `heisensim-inject --name my-server --fault connect-error` instead of
+  hunting for PIDs manually. Scans `/proc/*/comm` and `/proc/*/cmdline` on
+  Linux, falls back to `pgrep` on macOS. Errors clearly on zero or ambiguous matches.
+- **aarch64 (ARM64) Ptrace Support**: Process-level fault injection now works
+  on ARM Linux — GitHub Actions ARM runners, AWS Graviton, Apple Silicon VMs.
+  Architecture-specific syscall numbers and register access abstracted via `abi` module.
+  Uses `NT_ARM_SYSTEM_CALL` (`PTRACE_SETREGSET` 0x404) for reliable syscall blocking on ARM.
+
 ## [0.12.1] - 2026-08-28
 
 ### Fixed
@@ -146,6 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew tap installation
 - GitHub Actions CI/CD
 
+[0.13.0]: https://github.com/heisensim/heisensim/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/heisensim/heisensim/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/heisensim/heisensim/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/heisensim/heisensim/compare/v0.10.0...v0.11.0
