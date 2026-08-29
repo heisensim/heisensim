@@ -1,16 +1,170 @@
 #![allow(clippy::new_without_default)]
 /// Ptrace-based execution tracer with multi-thread support.
+///
+/// Supports both x86_64 and aarch64 Linux targets. Architecture-specific
+/// syscall numbers and register access are abstracted via helper functions.
 use crate::syscall::{InterceptedSyscall, SyscallResult};
 use anyhow::Result;
 use nix::unistd::Pid;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use std::collections::HashMap;
+
+/// Convenience: true when ptrace fault injection is available.
+/// Used to gate implementations that need Linux + (x86_64 or aarch64).
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod abi {
+    // Architecture-specific syscall numbers and register accessors.
+
+    use super::*;
+
+    // ── Syscall numbers ───────────────────────────────────────────────
+
+    #[cfg(target_arch = "x86_64")]
+    pub mod nr {
+        pub const CLOCK_GETTIME: i64 = 228;
+        pub const GETTIMEOFDAY: i64 = 96;
+        pub const NANOSLEEP: i64 = 35;
+        pub const GETRANDOM: i64 = 318;
+        pub const SOCKET: i64 = 41;
+        pub const CONNECT: i64 = 42;
+        pub const ACCEPT: i64 = 43;
+        pub const SENDTO: i64 = 44;
+        pub const RECVFROM: i64 = 45;
+        pub const BIND: i64 = 49;
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub mod nr {
+        pub const CLOCK_GETTIME: i64 = 113;
+        pub const GETTIMEOFDAY: i64 = 169;
+        pub const NANOSLEEP: i64 = 101;
+        pub const GETRANDOM: i64 = 278;
+        pub const SOCKET: i64 = 198;
+        pub const CONNECT: i64 = 203;
+        pub const ACCEPT: i64 = 202;
+        pub const SENDTO: i64 = 206;
+        pub const RECVFROM: i64 = 207;
+        pub const BIND: i64 = 200;
+    }
+
+    // ── Register accessors ────────────────────────────────────────────
+
+    /// Extract the syscall number from registers.
+    #[cfg(target_arch = "x86_64")]
+    pub fn syscall_nr(regs: &libc::user_regs_struct) -> i64 {
+        regs.orig_rax as i64
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn syscall_nr(regs: &libc::user_regs_struct) -> i64 {
+        regs.regs[8] as i64
+    }
+
+    /// Extract syscall argument 0 (first arg).
+    #[cfg(target_arch = "x86_64")]
+    pub fn arg0(regs: &libc::user_regs_struct) -> u64 {
+        regs.rdi
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn arg0(regs: &libc::user_regs_struct) -> u64 {
+        regs.regs[0]
+    }
+
+    /// Extract syscall argument 1 (second arg).
+    #[cfg(target_arch = "x86_64")]
+    pub fn arg1(regs: &libc::user_regs_struct) -> u64 {
+        regs.rsi
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn arg1(regs: &libc::user_regs_struct) -> u64 {
+        regs.regs[1]
+    }
+
+    /// Extract syscall argument 2 (third arg).
+    #[cfg(target_arch = "x86_64")]
+    pub fn arg2(regs: &libc::user_regs_struct) -> u64 {
+        regs.rdx
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn arg2(regs: &libc::user_regs_struct) -> u64 {
+        regs.regs[2]
+    }
+
+    /// Set the syscall return value in registers.
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_return(regs: &mut libc::user_regs_struct, value: u64) {
+        regs.rax = value;
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn set_return(regs: &mut libc::user_regs_struct, value: u64) {
+        regs.regs[0] = value;
+    }
+
+    /// Block the current syscall by replacing the syscall number with an invalid one.
+    ///
+    /// On x86_64: sets `orig_rax = u64::MAX` to make the kernel skip the syscall.
+    /// On aarch64: uses `PTRACE_SETREGSET` with `NT_ARM_SYSTEM_CALL` to set the
+    /// syscall number to `-1`, which the kernel respects as "skip this syscall".
+    pub fn block_syscall(pid: Pid, regs: &mut libc::user_regs_struct) -> Result<()> {
+        use nix::sys::ptrace;
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            regs.orig_rax = u64::MAX;
+            ptrace::setregs(pid, *regs)?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            // Must use NT_ARM_SYSTEM_CALL to change the syscall number on aarch64.
+            // Writing to regs[8] (x8) does NOT reliably cancel the syscall because
+            // the kernel latches the syscall number before notifying ptrace.
+            const NT_ARM_SYSTEM_CALL: libc::c_int = 0x404;
+            let mut syscallno: libc::c_int = -1;
+            let mut iov = libc::iovec {
+                iov_base: &mut syscallno as *mut _ as *mut libc::c_void,
+                iov_len: std::mem::size_of::<libc::c_int>(),
+            };
+            let ret = unsafe {
+                libc::ptrace(
+                    libc::PTRACE_SETREGSET,
+                    libc::pid_t::from(pid.as_raw()),
+                    NT_ARM_SYSTEM_CALL as libc::c_ulong,
+                    &mut iov as *mut _ as *mut libc::c_void,
+                )
+            };
+            if ret == -1 {
+                return Err(anyhow::anyhow!(
+                    "PTRACE_SETREGSET NT_ARM_SYSTEM_CALL failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            // Also update regs to reflect the blocked state
+            ptrace::setregs(pid, *regs)?;
+        }
+
+        Ok(())
+    }
+}
 
 /// Read `len` bytes from a traced process's memory at `addr`.
 ///
-/// Uses `ptrace::read` (PTRACE_PEEKDATA) in word-sized chunks (8 bytes on x86_64).
+/// Uses `ptrace::read` (PTRACE_PEEKDATA) in word-sized chunks (8 bytes).
 /// Returns the bytes read, or an empty vec on any error (graceful fallback).
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn read_process_memory(pid: Pid, addr: u64, len: usize) -> Vec<u8> {
     use nix::sys::ptrace;
 
@@ -45,7 +199,10 @@ fn read_process_memory(pid: Pid, addr: u64, len: usize) -> Vec<u8> {
 ///
 /// Tracks whether each thread is running (resumed via PTRACE_SYSCALL)
 /// or stopped at a syscall entry waiting for the tracer to decide.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[derive(Debug)]
 enum ThreadState {
     /// Thread has been resumed via PTRACE_SYSCALL and is running.
@@ -59,11 +216,19 @@ enum ThreadState {
 ///
 /// Supports multi-threaded targets: attaches to all threads via `/proc/PID/task/`
 /// and tracks new threads created via `clone()` using `PTRACE_O_TRACECLONE`.
+///
+/// Supports both x86_64 and aarch64 Linux.
 pub struct PtraceTracer {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     threads: HashMap<Pid, ThreadState>,
     leader: Option<Pid>,
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     _pid: Option<Pid>,
 }
 
@@ -71,21 +236,33 @@ impl PtraceTracer {
     /// Create a new tracer instance.
     pub fn new() -> Self {
         Self {
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
             threads: HashMap::new(),
             leader: None,
-            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            #[cfg(not(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )))]
             _pid: None,
         }
     }
 
     /// Return the number of currently traced threads.
     pub fn thread_count(&self) -> usize {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         {
             self.threads.len()
         }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )))]
         {
             0
         }
@@ -120,7 +297,7 @@ impl PtraceTracer {
                     | ptrace::Options::PTRACE_O_EXITKILL
                     | ptrace::Options::PTRACE_O_TRACECLONE,
             )?;
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             self.threads.insert(pid, ThreadState::Running);
             return Ok(());
         }
@@ -148,7 +325,7 @@ impl PtraceTracer {
                     | ptrace::Options::PTRACE_O_EXITKILL
                     | ptrace::Options::PTRACE_O_TRACECLONE,
             )?;
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             self.threads.insert(tid, ThreadState::Running);
         }
 
@@ -171,7 +348,10 @@ impl PtraceTracer {
     /// Returns the thread PID and the parsed syscall, or `Ok(None)` if the
     /// deadline expires. Handles clone events (new threads) and thread exits
     /// transparently.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     pub fn wait_for_syscall(
         &mut self,
         deadline: Option<std::time::Instant>,
@@ -287,50 +467,56 @@ impl PtraceTracer {
     }
 
     /// Parse registers into an InterceptedSyscall enum.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    ///
+    /// Uses architecture-specific syscall numbers and register accessors
+    /// from the `abi` module.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     fn parse_syscall(&self, pid: Pid, regs: libc::user_regs_struct) -> InterceptedSyscall {
-        match regs.orig_rax as i64 {
-            228 => InterceptedSyscall::ClockGettime {
-                clock_id: regs.rdi as i32,
+        match abi::syscall_nr(&regs) {
+            abi::nr::CLOCK_GETTIME => InterceptedSyscall::ClockGettime {
+                clock_id: abi::arg0(&regs) as i32,
             },
-            96 => InterceptedSyscall::GetTimeOfDay,
-            35 => InterceptedSyscall::Nanosleep {
-                requested_ns: regs.rdi,
+            abi::nr::GETTIMEOFDAY => InterceptedSyscall::GetTimeOfDay,
+            abi::nr::NANOSLEEP => InterceptedSyscall::Nanosleep {
+                requested_ns: abi::arg0(&regs),
             },
-            318 => InterceptedSyscall::GetRandom {
-                len: regs.rsi as usize,
+            abi::nr::GETRANDOM => InterceptedSyscall::GetRandom {
+                len: abi::arg1(&regs) as usize,
             },
-            41 => InterceptedSyscall::Socket {
-                domain: regs.rdi as i32,
-                sock_type: regs.rsi as i32,
-                protocol: regs.rdx as i32,
+            abi::nr::SOCKET => InterceptedSyscall::Socket {
+                domain: abi::arg0(&regs) as i32,
+                sock_type: abi::arg1(&regs) as i32,
+                protocol: abi::arg2(&regs) as i32,
             },
-            42 => {
-                let addr_ptr = regs.rsi;
-                let addr_len = (regs.rdx as usize).min(128);
+            abi::nr::CONNECT => {
+                let addr_ptr = abi::arg1(&regs);
+                let addr_len = (abi::arg2(&regs) as usize).min(128);
                 let addr = read_process_memory(pid, addr_ptr, addr_len);
                 InterceptedSyscall::Connect {
-                    fd: regs.rdi as i32,
+                    fd: abi::arg0(&regs) as i32,
                     addr,
                 }
             }
-            44 => InterceptedSyscall::Send {
-                fd: regs.rdi as i32,
-                len: regs.rdx as usize,
+            abi::nr::SENDTO => InterceptedSyscall::Send {
+                fd: abi::arg0(&regs) as i32,
+                len: abi::arg2(&regs) as usize,
             },
-            45 => InterceptedSyscall::Recv {
-                fd: regs.rdi as i32,
-                len: regs.rdx as usize,
+            abi::nr::RECVFROM => InterceptedSyscall::Recv {
+                fd: abi::arg0(&regs) as i32,
+                len: abi::arg2(&regs) as usize,
             },
-            43 => InterceptedSyscall::Accept {
-                fd: regs.rdi as i32,
+            abi::nr::ACCEPT => InterceptedSyscall::Accept {
+                fd: abi::arg0(&regs) as i32,
             },
-            49 => {
-                let addr_ptr = regs.rsi;
-                let addr_len = (regs.rdx as usize).min(128);
+            abi::nr::BIND => {
+                let addr_ptr = abi::arg1(&regs);
+                let addr_len = (abi::arg2(&regs) as usize).min(128);
                 let addr = read_process_memory(pid, addr_ptr, addr_len);
                 InterceptedSyscall::Bind {
-                    fd: regs.rdi as i32,
+                    fd: abi::arg0(&regs) as i32,
                     addr,
                 }
             }
@@ -338,18 +524,24 @@ impl PtraceTracer {
         }
     }
 
-    /// Wait stub for non-x86_64-Linux.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    /// Wait stub for unsupported platforms.
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     pub fn wait_for_syscall(
         &mut self,
         _deadline: Option<std::time::Instant>,
     ) -> Result<Option<(Pid, InterceptedSyscall)>> {
-        anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
+        anyhow::bail!("ptrace syscall tracing is only supported on x86_64/aarch64 Linux")
     }
 }
 
 /// Wait for syscall-exit stop on a specific thread, forwarding any intervening signals.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn wait_for_syscall_exit(pid: Pid) -> Result<()> {
     use nix::sys::{
         ptrace,
@@ -374,7 +566,10 @@ fn wait_for_syscall_exit(pid: Pid) -> Result<()> {
 
 impl PtraceTracer {
     /// Inject the result of a syscall back into a specific thread.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     pub fn set_result(&mut self, tid: Pid, result: SyscallResult) -> Result<()> {
         use nix::sys::ptrace;
 
@@ -387,17 +582,16 @@ impl PtraceTracer {
                 ptrace::syscall(tid, None)?;
                 wait_for_syscall_exit(tid)?;
                 let mut regs = ptrace::getregs(tid)?;
-                regs.rax = value as u64;
+                abi::set_return(&mut regs, value as u64);
                 ptrace::setregs(tid, regs)?;
             }
             SyscallResult::Block(errno) => {
                 let mut regs = ptrace::getregs(tid)?;
-                regs.orig_rax = u64::MAX;
-                ptrace::setregs(tid, regs)?;
+                abi::block_syscall(tid, &mut regs)?;
                 ptrace::syscall(tid, None)?;
                 wait_for_syscall_exit(tid)?;
                 let mut regs = ptrace::getregs(tid)?;
-                regs.rax = (-errno as i64) as u64;
+                abi::set_return(&mut regs, (-errno as i64) as u64);
                 ptrace::setregs(tid, regs)?;
             }
             SyscallResult::Delay(duration) => {
@@ -416,16 +610,19 @@ impl PtraceTracer {
         Ok(())
     }
 
-    /// Set result stub for non-x86_64-Linux.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    /// Set result stub for unsupported platforms.
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     pub fn set_result(&mut self, _tid: Pid, _result: SyscallResult) -> Result<()> {
-        anyhow::bail!("ptrace syscall tracing is only supported on x86_64 Linux")
+        anyhow::bail!("ptrace syscall tracing is only supported on x86_64/aarch64 Linux")
     }
 
     /// Detach from all traced threads.
     #[cfg(target_os = "linux")]
     pub fn detach(&mut self) -> Result<()> {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         {
             for tid in self.threads.drain().map(|(tid, _)| tid) {
                 if let Err(e) = nix::sys::ptrace::detach(tid, None) {
@@ -441,7 +638,10 @@ impl PtraceTracer {
     #[cfg(not(target_os = "linux"))]
     pub fn detach(&mut self) -> Result<()> {
         self.leader = None;
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )))]
         {
             self._pid = None;
         }
@@ -481,7 +681,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     fn test_wait_for_syscall_non_linux_errors() {
         let mut tracer = PtraceTracer::new();
         let result = tracer.wait_for_syscall(None);
@@ -490,12 +693,15 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("only supported on x86_64 Linux")
+                .contains("only supported on x86_64/aarch64 Linux")
         );
     }
 
     #[test]
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     fn test_set_result_non_linux_errors() {
         let mut tracer = PtraceTracer::new();
         let result = tracer.set_result(Pid::from_raw(1), SyscallResult::Allow);
@@ -504,7 +710,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("only supported on x86_64 Linux")
+                .contains("only supported on x86_64/aarch64 Linux")
         );
     }
 

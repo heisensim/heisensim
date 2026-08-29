@@ -4,20 +4,32 @@
 //! from the SyscallHandler, and detaches after a specified duration.
 
 use crate::handler::NetworkFaultConfig;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use crate::handler::SyscallHandler;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use crate::ptrace::PtraceTracer;
 use anyhow::Result;
 use std::time::Duration;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use std::time::Instant;
 
 /// Run the ptrace fault injection loop on a target process.
 ///
 /// Attaches to `pid`, intercepts syscalls for `duration`, applying faults
 /// from `config`. Detaches cleanly on timeout or error.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub fn trace_with_faults(pid: u32, config: &NetworkFaultConfig, duration: Duration) -> Result<()> {
     use nix::unistd::Pid;
     use std::sync::Arc;
@@ -54,7 +66,10 @@ pub fn trace_with_faults(pid: u32, config: &NetworkFaultConfig, duration: Durati
     result
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn run_loop(
     tracer: &mut PtraceTracer,
     handler: &mut SyscallHandler,
@@ -86,13 +101,16 @@ fn run_loop(
 }
 
 /// Stub for non-x86_64-Linux.
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
 pub fn trace_with_faults(
     _pid: u32,
     _config: &NetworkFaultConfig,
     _duration: Duration,
 ) -> Result<()> {
-    anyhow::bail!("process-level fault injection is only supported on x86_64 Linux")
+    anyhow::bail!("process-level fault injection is only supported on x86_64/aarch64 Linux")
 }
 
 #[cfg(test)]
@@ -101,7 +119,10 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     fn test_trace_with_faults_non_linux_errors() {
         let config = NetworkFaultConfig::default();
         let result = trace_with_faults(1, &config, Duration::from_secs(5));
@@ -110,7 +131,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("only supported on x86_64 Linux")
+                .contains("only supported on x86_64/aarch64 Linux")
         );
     }
 }
