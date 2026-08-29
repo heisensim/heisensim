@@ -632,7 +632,6 @@ impl FaultOperator {
         }
 
         self.timeline.emit(EventKind::FaultReverted { fault_id });
-        record_fault_reverted("dns_failure", pod_name);
         info!(pod = pod_name, "Reverted DNS failure");
 
         if !errs.is_empty() {
@@ -640,6 +639,7 @@ impl FaultOperator {
             return Err(errs.remove(0).context("Failed to revert DNS failure rules"));
         }
 
+        record_fault_reverted("dns_failure", pod_name);
         Ok(())
     }
 }
