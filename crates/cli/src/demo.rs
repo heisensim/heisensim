@@ -220,6 +220,10 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             crash_grace_period: None,
             profile: None,
             property_template: None,
+            baseline: false,
+            max_latency_multiplier: 3.0,
+            max_availability_drop: 10.0,
+            export_baseline: None,
         };
         super::handle_run(args, None).await?
     } else {
@@ -286,6 +290,10 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
                 crash_grace_period: None,
                 profile: None,
                 property_template: None,
+                baseline: false,
+                max_latency_multiplier: 3.0,
+                max_availability_drop: 10.0,
+                export_baseline: None,
             };
 
             let replay_exit = super::handle_run(replay_args, None).await?;
