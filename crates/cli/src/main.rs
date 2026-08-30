@@ -2610,12 +2610,25 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
     // 2. Create client with auth chain
     let client = DivergeClient::new(&url, args.token.clone());
 
-    // 2. Parse wait timeout
-    let wait_secs = args.wait.trim_end_matches('s').parse::<u64>().unwrap_or(30);
+    // 3. Parse wait timeout
+    let wait_secs = args
+        .wait
+        .trim_end_matches('s')
+        .parse::<u64>()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid --wait value '{}'. Expected a duration like '30s' or '120s'.",
+                args.wait
+            )
+        })?;
     let wait_timeout = std::time::Duration::from_secs(wait_secs);
 
-    // 3. Resolve namespace
-    let namespace = args.namespace.as_deref().unwrap_or("default");
+    // 4. Resolve namespace (required — no misleading "default" fallback)
+    let namespace = args.namespace.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Namespace is required. Use --namespace to specify the Diverge environment namespace."
+        )
+    })?;
 
     // 4. Wait for environment to become Running
     let env = client

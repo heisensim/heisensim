@@ -71,6 +71,17 @@ impl DivergeClient {
             .json(request);
 
         if let Some(token) = &self.token {
+            // Reject cleartext HTTP for non-loopback hosts (CWE-319)
+            let is_loopback = url.contains("://localhost")
+                || url.contains("://127.0.0.1")
+                || url.contains("://[::1]");
+            if url.starts_with("http://") && !is_loopback {
+                anyhow::bail!(
+                    "Refusing to send bearer token over unencrypted HTTP to '{}'.\n\
+                     Use HTTPS or connect to localhost for development.",
+                    self.base_url
+                );
+            }
             req = req.header("Authorization", format!("Bearer {}", token));
         }
 

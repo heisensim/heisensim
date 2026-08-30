@@ -11,6 +11,7 @@ pub struct GetEnvironmentResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListEnvironmentsResponse {
+    #[serde(default)]
     pub environments: Vec<Environment>,
     #[serde(default)]
     pub next_page_token: String,
@@ -31,6 +32,7 @@ pub struct Environment {
     #[serde(default)]
     pub annotations: HashMap<String, String>,
     pub spec: EnvironmentSpec,
+    #[serde(default)]
     pub status: EnvironmentStatus,
 }
 
@@ -82,7 +84,7 @@ pub struct EnvironmentRouting {
     pub external_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentStatus {
     #[serde(default)]
@@ -100,6 +102,7 @@ impl Environment {
             .routing
             .header_key
             .as_deref()
+            .filter(|s| !s.trim().is_empty())
             .unwrap_or("x-preview-env")
     }
 
@@ -109,6 +112,7 @@ impl Environment {
             .routing
             .header_value
             .as_deref()
+            .filter(|s| !s.trim().is_empty())
             .unwrap_or(&self.name)
     }
 
@@ -122,7 +126,13 @@ impl Environment {
         self.status
             .url
             .as_deref()
-            .or(self.spec.routing.external_url.as_deref())
+            .filter(|s| !s.trim().is_empty())
+            .or(self
+                .spec
+                .routing
+                .external_url
+                .as_deref()
+                .filter(|s| !s.trim().is_empty()))
     }
 
     /// Get the list of changed services
