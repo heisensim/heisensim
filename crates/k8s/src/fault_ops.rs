@@ -93,6 +93,8 @@ impl FaultOperator {
         pod_name: &str,
         grace_period_secs: Option<u32>,
     ) -> Result<Uuid> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let api: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -134,6 +136,8 @@ impl FaultOperator {
     /// Inject an eviction fault (tests PDBs).
     /// Returns `(fault_id, evicted)` where `evicted` is false if PDB blocked it.
     pub async fn inject_eviction(&self, namespace: &str, pod_name: &str) -> Result<(Uuid, bool)> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
 
         self.timeline.emit(EventKind::FaultInjected {
@@ -180,6 +184,8 @@ impl FaultOperator {
         pod_name: &str,
         command: &[&str],
     ) -> Result<String> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         match self.inject_method {
             InjectMethod::Exec => self.exec_in_pod(namespace, pod_name, command).await,
             InjectMethod::Debug => {
@@ -295,6 +301,8 @@ impl FaultOperator {
         jitter_ms: u32,
         duration_secs: f64,
     ) -> Result<Uuid> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
 
@@ -365,6 +373,8 @@ impl FaultOperator {
         pod_name: &str,
         fault_id: Uuid,
     ) -> Result<()> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         self.exec_network_command(
             namespace,
             pod_name,
@@ -386,6 +396,8 @@ impl FaultOperator {
         pod_b_ip: &str,
         duration_secs: f64,
     ) -> Result<Uuid> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{} -> {}", namespace, pod_a, pod_b_ip);
 
@@ -444,6 +456,8 @@ impl FaultOperator {
         target_ip: &str,
         fault_id: Uuid,
     ) -> Result<()> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         self.exec_network_command(
             namespace,
             pod_name,
@@ -466,6 +480,8 @@ impl FaultOperator {
         mem_bytes: u64,
         duration_secs: f64,
     ) -> Result<Uuid> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
 
@@ -534,6 +550,8 @@ impl FaultOperator {
         pod_name: &str,
         duration_secs: f64,
     ) -> Result<Uuid> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
 
@@ -614,6 +632,8 @@ impl FaultOperator {
         pod_name: &str,
         fault_id: Uuid,
     ) -> Result<()> {
+        crate::fencing::validate_namespace(namespace)?;
+        crate::fencing::validate_namespace(namespace)?;
         let mut errs = Vec::new();
 
         if let Err(e) = self

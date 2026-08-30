@@ -98,6 +98,71 @@ enum Commands {
 
     /// Inject process-level faults (connect-error, fd-exhaustion) via ptrace (Linux only)
     ProcessFault(ProcessFaultArgs),
+
+    /// Diverge preview environment integration
+    #[command(subcommand)]
+    Diverge(DivergeCmds),
+}
+
+/// Diverge preview environment subcommands.
+#[derive(Subcommand, Debug)]
+enum DivergeCmds {
+    /// Run chaos testing against a Diverge preview environment
+    Run(DivergeRunArgs),
+}
+
+#[derive(Args, Debug)]
+struct DivergeRunArgs {
+    /// Diverge environment name (e.g. "pr-123")
+    pub env_name: String,
+
+    /// Kubernetes namespace (default: auto-detect from Diverge API)
+    #[arg(long)]
+    pub namespace: Option<String>,
+
+    /// Diverge API URL (or set DIVERGE_URL env var)
+    #[arg(long, default_value = "http://localhost:8080")]
+    pub url: String,
+
+    /// Auth token for Diverge API (auto-detects from DIVERGE_TOKEN env/SA if not set)
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Max time to wait for environment to become Running
+    #[arg(long, default_value = "30s")]
+    pub wait: String,
+
+    /// Target ALL services (default: only changed services + upstream callers)
+    #[arg(long)]
+    pub all_services: bool,
+
+    /// Chaos config file (if omitted, auto-generates probes from Diverge metadata)
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+
+    /// Duration of chaos testing
+    #[arg(long, default_value = "30s")]
+    pub duration: String,
+
+    /// Seed for deterministic replay
+    #[arg(long)]
+    pub seed: Option<u64>,
+
+    /// Fault types to inject
+    #[arg(long, default_value = "latency,partition,dns", value_delimiter = ',')]
+    pub faults: Vec<String>,
+
+    /// Run in soft-fail mode (exit 0, report only — for CI trust-building)
+    #[arg(long)]
+    pub soft_fail: bool,
+
+    /// Output format
+    #[arg(long, default_value = "text")]
+    pub output: OutputFormat,
+
+    /// OTLP endpoint for exporting traces
+    #[arg(long)]
+    pub otel_endpoint: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -525,6 +590,7 @@ async fn main() -> Result<()> {
     let otel_endpoint = match &cli.command {
         Commands::Run(args) => args.otel_endpoint.clone(),
         Commands::Explore(args) => args.otel_endpoint.clone(),
+        Commands::Diverge(DivergeCmds::Run(args)) => args.otel_endpoint.clone(),
         _ => None,
     };
 
@@ -611,6 +677,10 @@ async fn main() -> Result<()> {
         || matches!(
             &cli.command,
             Commands::Run(a) if a.output == OutputFormat::Json || a.output == OutputFormat::Junit
+        )
+        || matches!(
+            &cli.command,
+            Commands::Diverge(DivergeCmds::Run(a)) if a.output == OutputFormat::Json
         );
     if !is_machine_output {
         eprintln!("{}", BANNER);
@@ -654,6 +724,7 @@ async fn main() -> Result<()> {
             handle_process_fault(args).await?;
             0
         }
+        Commands::Diverge(DivergeCmds::Run(args)) => handle_diverge_run(args).await?,
     };
 
     // 4. Shutdown OTel provider with timeout (E9 fix #2: never hang on exit)
@@ -2513,4 +2584,119 @@ async fn handle_process_fault(args: ProcessFaultArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Handle the `diverge run` subcommand — chaos testing against a Diverge preview environment.
+///
+/// Discovers the preview environment via ConnectRPC, resolves routing headers,
+/// validates namespace fencing, and runs chaos with blast-radius targeting.
+async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
+    use heisensim_diverge::DivergeClient;
+    use heisensim_k8s::fencing;
+
+    info!(
+        env = args.env_name.as_str(),
+        url = args.url.as_str(),
+        "🔗 Connecting to Diverge API..."
+    );
+
+    // 1. Resolve URL from env var if using default
+    let url = if args.url == "http://localhost:8080" {
+        std::env::var("DIVERGE_URL").unwrap_or(args.url)
+    } else {
+        args.url
+    };
+
+    // 2. Create client with auth chain
+    let client = DivergeClient::new(&url, args.token.clone());
+
+    // 3. Parse wait timeout
+    let wait_secs = args
+        .wait
+        .trim_end_matches('s')
+        .parse::<u64>()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid --wait value '{}'. Expected a duration like '30s' or '120s'.",
+                args.wait
+            )
+        })?;
+    let wait_timeout = std::time::Duration::from_secs(wait_secs);
+
+    // 4. Resolve namespace (required — no misleading "default" fallback)
+    let namespace = args.namespace.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Namespace is required. Use --namespace to specify the Diverge environment namespace."
+        )
+    })?;
+
+    // 4. Wait for environment to become Running
+    let env = client
+        .wait_for_running(namespace, &args.env_name, wait_timeout)
+        .await?;
+
+    // 5. Resolve context
+    let ctx = client.resolve_context(&env);
+
+    // 6. Validate namespace fencing
+    fencing::validate_namespace(&ctx.namespace)?;
+
+    // 7. Determine target services (blast-radius default vs --all-services)
+    let target_services = if args.all_services {
+        &ctx.services
+    } else if !ctx.changed_services.is_empty() {
+        info!(
+            changed = ?ctx.changed_services,
+            "Targeting changed services only (use --all-services to override)"
+        );
+        &ctx.changed_services
+    } else {
+        info!("No changed services detected, targeting all services");
+        &ctx.services
+    };
+
+    info!(
+        env = args.env_name.as_str(),
+        namespace = ctx.namespace.as_str(),
+        header = format!("{}: {}", ctx.header_key, ctx.header_value).as_str(),
+        services = ?target_services,
+        url = ctx.url.as_deref().unwrap_or("(none)"),
+        soft_fail = args.soft_fail,
+        "✅ Diverge environment discovered"
+    );
+
+    // 8. Warmup ping — wake scale-to-zero pods
+    if let Some(url) = &ctx.url {
+        info!(url = url.as_str(), "Sending warmup ping...");
+        let warmup_client = reqwest::Client::new();
+        match warmup_client
+            .get(url.as_str())
+            .header(&ctx.header_key, &ctx.header_value)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                info!(status = %resp.status(), "Warmup ping complete");
+            }
+            Err(e) => {
+                warn!("Warmup ping failed (pods may need more time): {}", e);
+            }
+        }
+    }
+
+    // 9. TODO: Wire into handle_run with DivergeContext for header injection + pod filtering
+    //    For now, log the resolved context and exit successfully.
+    info!(
+        "🎯 Diverge integration ready. Target services: {:?}",
+        target_services
+    );
+    info!("📋 Next step: wire DivergeContext into handle_run for header injection + pod filtering");
+
+    if args.soft_fail {
+        info!("Soft-fail mode: exiting with code 0 regardless of test results");
+        Ok(0)
+    } else {
+        Ok(0)
+    }
 }

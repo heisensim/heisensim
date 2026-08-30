@@ -20,6 +20,7 @@ heisensim-k8s.workspace = true
 heisensim-fault.workspace = true
 heisensim-props.workspace = true
 heisensim-intercept.workspace = true
+heisensim-diverge.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
@@ -38,6 +39,7 @@ opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
 tempfile = "3"
 xxhash-rust.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
