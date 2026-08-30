@@ -19,6 +19,7 @@
 //! `SimulationSnapshot` for deterministic simulation testing.
 
 pub mod availability;
+pub mod baseline;
 pub mod builtin;
 pub mod cascade;
 pub mod checker;
@@ -32,6 +33,10 @@ pub mod timeline;
 
 // Timeline properties (primary API for K8s chaos)
 pub use availability::Availability;
+pub use baseline::{
+    BaselineAvailabilityDiff, BaselineLatencyDiff, BaselineSnapshot, capture_baseline,
+    smart_baseline_duration,
+};
 pub use cascade::NoCascade;
 pub use dns_resolution::DnsResolution;
 pub use error_budget::ErrorBudget;

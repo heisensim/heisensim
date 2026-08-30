@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use heisensim_props::TimelineProperty;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::WithExportConfig;
 use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -163,6 +164,22 @@ struct DivergeRunArgs {
     /// OTLP endpoint for exporting traces
     #[arg(long)]
     pub otel_endpoint: Option<String>,
+
+    /// Enable A/B baseline diffing
+    #[arg(long)]
+    pub baseline: bool,
+
+    /// Maximum allowed latency multiplier vs baseline (default: 3.0)
+    #[arg(long, default_value = "3.0")]
+    pub max_latency_multiplier: f64,
+
+    /// Maximum allowed availability drop in percentage points (default: 10.0)
+    #[arg(long, default_value = "10.0")]
+    pub max_availability_drop: f64,
+
+    /// Export baseline snapshot to a JSON file
+    #[arg(long)]
+    pub export_baseline: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -364,6 +381,25 @@ struct RunArgs {
     /// Pre-built SLA property template (e.g. three-nines, microservice, ci)
     #[arg(long, value_enum)]
     property_template: Option<properties::PropertyTemplate>,
+
+    /// Enable A/B baseline diffing. Captures probe metrics during warmup as baseline,
+    /// then asserts chaos-phase metrics stay within acceptable degradation.
+    #[arg(long)]
+    baseline: bool,
+
+    /// Maximum allowed latency multiplier vs baseline (default: 3.0).
+    /// Only used with --baseline. Example: 3.0 means chaos p95 ≤ 3x baseline p95.
+    #[arg(long, default_value = "3.0")]
+    max_latency_multiplier: f64,
+
+    /// Maximum allowed availability drop in percentage points (default: 10.0).
+    /// Only used with --baseline. Example: 10.0 means avail can drop at most 10pp.
+    #[arg(long, default_value = "10.0")]
+    max_availability_drop: f64,
+
+    /// Export baseline snapshot to a JSON file for CI drift tracking.
+    #[arg(long)]
+    export_baseline: Option<PathBuf>,
 }
 
 /// Fault profile presets.
@@ -875,7 +911,54 @@ async fn handle_run(
     // Warmup — let probes stabilize before injecting faults
     info!("Warming up for {}...", args.warmup);
     tokio::time::sleep(warmup).await;
-    info!("Warmup complete. Starting fault injection.");
+    info!("Warmup complete.");
+
+    // Capture baseline snapshot (if --baseline is enabled)
+    let baseline_snapshot = if args.baseline {
+        let events = handle.events();
+        match heisensim_props::capture_baseline(&events, warmup) {
+            Some(snapshot) => {
+                info!(
+                    "📊 Baseline captured: {} probes, {} total samples",
+                    snapshot.probes.len(),
+                    snapshot.total_samples
+                );
+                for (name, probe) in &snapshot.probes {
+                    info!(
+                        "  {} — p50: {}ms, p95: {}ms, avail: {:.1}%",
+                        name, probe.p50_ms, probe.p95_ms, probe.success_rate
+                    );
+                }
+
+                // Sanity check: warn if baseline is already degraded
+                for (name, probe) in &snapshot.probes {
+                    if probe.success_rate < 90.0 {
+                        warn!(
+                            "⚠️  Baseline for {} has low availability ({:.1}%) — results may be unreliable",
+                            name, probe.success_rate
+                        );
+                    }
+                }
+
+                // Export baseline JSON if requested
+                if let Some(ref path) = args.export_baseline {
+                    let json = serde_json::to_string_pretty(&snapshot)?;
+                    std::fs::write(path, &json)?;
+                    info!("📁 Baseline exported to {}", path.display());
+                }
+
+                Some(snapshot)
+            }
+            None => {
+                warn!("⚠️  No probe data during warmup — baseline diffing disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    info!("Starting fault injection.");
 
     // Fault injection loop
     let k8s_method = match args.inject_method {
@@ -1328,6 +1411,36 @@ async fn handle_run(
             warn!("Some properties FAILED. Exit code 1.");
             exit_code = 1;
         }
+    }
+
+    // Baseline diff properties (if --baseline was enabled and we have a snapshot)
+    if let Some(ref snapshot) = baseline_snapshot {
+        info!("📊 Evaluating baseline diff properties...");
+        let latency_prop = heisensim_props::BaselineLatencyDiff::new(
+            snapshot.clone(),
+            warmup,
+            args.max_latency_multiplier,
+        );
+        let avail_prop = heisensim_props::BaselineAvailabilityDiff::new(
+            snapshot.clone(),
+            warmup,
+            args.max_availability_drop,
+        );
+
+        let lat_verdict = latency_prop.evaluate(&final_events);
+        let avail_verdict = avail_prop.evaluate(&final_events);
+
+        if args.output == OutputFormat::Text {
+            properties::print_verdicts(&[lat_verdict.clone(), avail_verdict.clone()]);
+        }
+
+        if !lat_verdict.passed || !avail_verdict.passed {
+            warn!("Baseline diff properties FAILED. Exit code 1.");
+            exit_code = 1;
+        }
+
+        verdicts.push(lat_verdict);
+        verdicts.push(avail_verdict);
     }
 
     if let Some(mp) = meter_provider {
@@ -2915,9 +3028,38 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
     });
 
     // 13. Warmup — let probes stabilize before injecting faults
+    let diverge_warmup = std::time::Duration::from_secs(10);
     info!("Warming up for 10s (letting probes stabilize)...");
-    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-    info!("Warmup complete. Starting fault injection.");
+    tokio::time::sleep(diverge_warmup).await;
+    info!("Warmup complete.");
+
+    // Capture baseline snapshot (if --baseline is enabled)
+    let baseline_snapshot = if args.baseline {
+        let events = handle.events();
+        match heisensim_props::capture_baseline(&events, diverge_warmup) {
+            Some(snapshot) => {
+                info!(
+                    "📊 Baseline captured: {} probes, {} total samples",
+                    snapshot.probes.len(),
+                    snapshot.total_samples
+                );
+                if let Some(ref path) = args.export_baseline {
+                    let json = serde_json::to_string_pretty(&snapshot)?;
+                    std::fs::write(path, &json)?;
+                    info!("📁 Baseline exported to {}", path.display());
+                }
+                Some(snapshot)
+            }
+            None => {
+                warn!("⚠️  No probe data during warmup — baseline diffing disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    info!("Starting fault injection.");
 
     // 14. Fault injection loop
     let fault_op = heisensim_k8s::FaultOperator::with_method(
@@ -3125,7 +3267,7 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
     });
 
     let final_events = handle.events();
-    let exit_code = if summary.total_failures > 0 { 1 } else { 0 };
+    let mut exit_code = if summary.total_failures > 0 { 1 } else { 0 };
 
     // 17. Output results
     match args.output {
@@ -3156,6 +3298,33 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
         }
         _ => {
             report::render_terminal_report(&final_events);
+        }
+    }
+
+    // Baseline diff properties (if --baseline was enabled)
+    if let Some(ref snapshot) = baseline_snapshot {
+        info!("📊 Evaluating baseline diff properties...");
+        let latency_prop = heisensim_props::BaselineLatencyDiff::new(
+            snapshot.clone(),
+            diverge_warmup,
+            args.max_latency_multiplier,
+        );
+        let avail_prop = heisensim_props::BaselineAvailabilityDiff::new(
+            snapshot.clone(),
+            diverge_warmup,
+            args.max_availability_drop,
+        );
+
+        let lat_verdict = latency_prop.evaluate(&final_events);
+        let avail_verdict = avail_prop.evaluate(&final_events);
+
+        if args.output == OutputFormat::Text {
+            properties::print_verdicts(&[lat_verdict.clone(), avail_verdict.clone()]);
+        }
+
+        if !lat_verdict.passed || !avail_verdict.passed {
+            warn!("Baseline diff properties FAILED.");
+            exit_code = 1;
         }
     }
 
