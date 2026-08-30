@@ -4,7 +4,7 @@ use opentelemetry::metrics::MeterProvider;
 pub fn emit_verdict_metrics(
     meter_provider: &opentelemetry_sdk::metrics::SdkMeterProvider,
     verdicts: &[heisensim_props::PropertyVerdict],
-    seed: u64,
+    _seed: u64,
     duration_secs: f64,
     total_faults: usize,
 ) {
@@ -15,11 +15,13 @@ pub fn emit_verdict_metrics(
     let mut passed = 0u64;
     let mut failed = 0u64;
     for v in verdicts {
-        let attrs = vec![
-            KeyValue::new("property", v.property_name.clone()),
-            KeyValue::new("result", if v.passed { "pass" } else { "fail" }),
-        ];
-        property_counter.add(1, &attrs);
+        property_counter.add(
+            1,
+            &[
+                KeyValue::new("property", v.property_name.clone()),
+                KeyValue::new("result", if v.passed { "pass" } else { "fail" }),
+            ],
+        );
         if v.passed {
             passed += 1;
         } else {
@@ -27,23 +29,20 @@ pub fn emit_verdict_metrics(
         }
     }
 
-    // Summary gauges
+    // Summary gauges (seed removed — unbounded cardinality risk)
     let pass_gauge = meter.u64_gauge("heisensim.properties.passed").build();
     let fail_gauge = meter.u64_gauge("heisensim.properties.failed").build();
-    pass_gauge.record(passed, &[KeyValue::new("seed", seed.to_string())]);
-    fail_gauge.record(failed, &[KeyValue::new("seed", seed.to_string())]);
+    pass_gauge.record(passed, &[]);
+    fail_gauge.record(failed, &[]);
 
     // Run metrics
     let duration_hist = meter
         .f64_histogram("heisensim.run.duration_seconds")
         .build();
-    duration_hist.record(duration_secs, &[KeyValue::new("seed", seed.to_string())]);
+    duration_hist.record(duration_secs, &[]);
 
     let faults_counter = meter.u64_counter("heisensim.faults.injected").build();
-    faults_counter.add(
-        total_faults as u64,
-        &[KeyValue::new("seed", seed.to_string())],
-    );
+    faults_counter.add(total_faults as u64, &[]);
 }
 
 #[cfg(test)]
