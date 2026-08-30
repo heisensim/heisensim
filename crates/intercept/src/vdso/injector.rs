@@ -7,7 +7,7 @@
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(target_os = "linux")]
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::control::{InjectionHandle, TimeControl};
 
