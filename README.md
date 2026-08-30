@@ -410,7 +410,9 @@ heisensim/
 - `v0.10.0` ✅ Explore, bisect, diff, init presets, CI integration
 - `v0.11.0` ✅ vDSO time manipulation, process fault injection engine
 - `v0.12.0` ✅ Property templates, connect-latency, port filtering, multi-thread tracing
-- Future: mdbook docs, Grafana dashboard, Diverge × heisensim integration
+- `v0.13.0` ✅ `--name` process targeting, aarch64 ptrace support
+- `v0.14.0` ✅ Grafana dashboard, streaming OTel metrics, one-command observability stack
+- Future: mdbook docs, Diverge × heisensim integration
 
 ---
 

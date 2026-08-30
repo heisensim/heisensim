@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-08-29
+
+### Added
+- **Streaming OTel Metrics**: Real-time probe and fault metrics emitted via
+  OpenTelemetry (previously only at run-end). New instruments:
+  `heisensim.probe.latency_ms` (histogram), `heisensim.probe.count` (counter),
+  `heisensim.fault.injected_total` (counter), `heisensim.fault.reverted_total`
+  (counter). Zero-cost no-op when `--otel-endpoint` is not set.
+- **Grafana Dashboard**: Pre-built 10-panel dashboard with probe latency
+  (p50/p95/p99), fault injection timeline, probe success/failure/timeout bars,
+  and property verdict panels. Ships as `examples/grafana/heisensim-dashboard.json`.
+- **One-Command Observability Stack**: `docker compose up` in `examples/grafana/`
+  launches OTel Collector + Prometheus + Tempo + Grafana with auto-provisioned
+  datasources and the heisensim dashboard pre-loaded.
+
+### Fixed
+- Fault revert metrics (`heisensim.fault.reverted_total`) now only emit on
+  successful cleanup — previously recorded even when stress-ng or iptables
+  revert commands failed.
+
 ## [0.13.0] - 2026-08-29
 
 ### Added
@@ -158,6 +178,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew tap installation
 - GitHub Actions CI/CD
 
+[0.14.0]: https://github.com/heisensim/heisensim/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/heisensim/heisensim/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/heisensim/heisensim/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/heisensim/heisensim/compare/v0.11.0...v0.12.0
