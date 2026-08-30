@@ -1,6 +1,7 @@
 pub mod cluster;
 pub mod discovery;
 pub mod fault_ops;
+pub mod fencing;
 pub mod probe_scraper;
 
 pub use cluster::K3dCluster;

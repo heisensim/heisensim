@@ -19,6 +19,7 @@ heisensim-props = { version = "0.14.0", path = "crates/props" }
 heisensim-timeline = { version = "0.14.0", path = "crates/timeline" }
 heisensim-probe = { version = "0.14.0", path = "crates/probe" }
 heisensim-k8s = { version = "0.14.0", path = "crates/k8s" }
+heisensim-diverge = { version = "0.14.0", path = "crates/diverge" }
 
 # External dependencies (pinned versions)
 anyhow = "1"
