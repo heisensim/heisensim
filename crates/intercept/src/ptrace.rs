@@ -318,7 +318,15 @@ impl PtraceTracer {
                 }
                 Err(e) => return Err(e.into()),
             }
-            waitpid(tid, None)?;
+            match waitpid(tid, None)? {
+                nix::sys::wait::WaitStatus::Exited(..)
+                | nix::sys::wait::WaitStatus::Signaled(..) => {
+                    // Thread died between attach and waitpid — skip
+                    tracing::debug!(tid = tid_raw, "thread exited during attach, skipping");
+                    continue;
+                }
+                _ => {}
+            }
             ptrace::setoptions(
                 tid,
                 ptrace::Options::PTRACE_O_TRACESYSGOOD
@@ -559,7 +567,14 @@ fn wait_for_syscall_exit(pid: Pid) -> Result<()> {
             WaitStatus::Exited(_, code) => {
                 anyhow::bail!("traced process exited with code {}", code);
             }
-            _ => continue,
+            WaitStatus::PtraceEvent(..) => {
+                // Resume tracee past the ptrace event (clone/fork/exec)
+                ptrace::syscall(pid, None)?;
+            }
+            _ => {
+                // Unknown status — resume to avoid hanging
+                ptrace::syscall(pid, None)?;
+            }
         }
     }
 }
