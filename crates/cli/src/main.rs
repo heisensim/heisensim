@@ -885,6 +885,30 @@ async fn handle_run(
     info!("Injection method: {:?}", args.inject_method);
     let fault_op =
         heisensim_k8s::FaultOperator::with_method(client.clone(), handle.clone(), k8s_method);
+
+    // Initialize fault tracker for graceful shutdown
+    let tracker = std::sync::Arc::new(heisensim_k8s::FaultTracker::new());
+
+    // SIGINT handler — revert all active faults before exiting
+    let shutdown_tracker = tracker.clone();
+    let shutdown_fault_op = fault_op.clone();
+    let shutdown_cancel = cancel_tx.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            warn!("⚠️  SIGINT received — reverting all active faults...");
+            let _ = shutdown_cancel.send(true); // Stop probes
+            let results = shutdown_tracker.revert_all(&shutdown_fault_op).await;
+            let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+            if failed > 0 {
+                warn!(
+                    "⚠️  {} faults could not be reverted — manual intervention may be required!",
+                    failed
+                );
+            }
+            std::process::exit(130); // 128 + SIGINT
+        }
+    });
+
     let mut rng = StdRng::seed_from_u64(seed);
     let fault_interval = duration / 4; // inject ~4 faults over the duration
     let mut elapsed = std::time::Duration::ZERO;
@@ -943,7 +967,31 @@ async fn handle_run(
                     .inject_network_latency(&args.namespace, &target.name, delay, jitter, 15.0)
                     .await
                 {
-                    Ok(id) => info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter),
+                    Ok(id) => {
+                        info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter);
+                        let fault = heisensim_k8s::ActiveFault {
+                            fault_id: id,
+                            kind: heisensim_k8s::ActiveFaultKind::NetworkLatency,
+                            namespace: args.namespace.clone(),
+                            pod_name: target.name.clone(),
+                            injected_at: std::time::Instant::now(),
+                        };
+                        tracker.track(fault).await;
+                        // Schedule timed revert
+                        let t = tracker.clone();
+                        let fo = fault_op.clone();
+                        let ns = args.namespace.clone();
+                        let pn = target.name.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            match fo.revert_network_latency(&ns, &pn, id).await {
+                                Ok(()) => t.untrack(id).await,
+                                Err(e) => {
+                                    warn!(fault_id = %id, error = %e, "Timed revert failed; will retry at shutdown")
+                                }
+                            }
+                        });
+                    }
                     Err(e) => warn!("  Failed to inject latency: {}", e),
                 }
             }
@@ -960,7 +1008,33 @@ async fn handle_run(
                         .inject_partition(&args.namespace, &target.name, other_ip, 20.0)
                         .await
                     {
-                        Ok(id) => info!("  Fault {}: {} ↛ {} for 20s", id, target.name, other.name),
+                        Ok(id) => {
+                            info!("  Fault {}: {} ↛ {} for 20s", id, target.name, other.name);
+                            let fault = heisensim_k8s::ActiveFault {
+                                fault_id: id,
+                                kind: heisensim_k8s::ActiveFaultKind::Partition {
+                                    target_ip: other_ip.to_string(),
+                                },
+                                namespace: args.namespace.clone(),
+                                pod_name: target.name.clone(),
+                                injected_at: std::time::Instant::now(),
+                            };
+                            tracker.track(fault).await;
+                            let t = tracker.clone();
+                            let fo = fault_op.clone();
+                            let ns = args.namespace.clone();
+                            let pn = target.name.clone();
+                            let ip = other_ip.to_string();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                                match fo.revert_partition(&ns, &pn, &ip, id).await {
+                                    Ok(()) => t.untrack(id).await,
+                                    Err(e) => {
+                                        warn!(fault_id = %id, error = %e, "Timed revert failed; will retry at shutdown")
+                                    }
+                                }
+                            });
+                        }
                         Err(e) => warn!("  Failed to inject partition: {}", e),
                     }
                 } else {
@@ -990,7 +1064,30 @@ async fn handle_run(
                     .inject_dns_failure(&args.namespace, &target.name, 15.0)
                     .await
                 {
-                    Ok(id) => info!("  Fault {}: DNS blocked for 15s", id),
+                    Ok(id) => {
+                        info!("  Fault {}: DNS blocked for 15s", id);
+                        let fault = heisensim_k8s::ActiveFault {
+                            fault_id: id,
+                            kind: heisensim_k8s::ActiveFaultKind::DnsFailure,
+                            namespace: args.namespace.clone(),
+                            pod_name: target.name.clone(),
+                            injected_at: std::time::Instant::now(),
+                        };
+                        tracker.track(fault).await;
+                        let t = tracker.clone();
+                        let fo = fault_op.clone();
+                        let ns = args.namespace.clone();
+                        let pn = target.name.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            match fo.revert_dns_failure(&ns, &pn, id).await {
+                                Ok(()) => t.untrack(id).await,
+                                Err(e) => {
+                                    warn!(fault_id = %id, error = %e, "Timed revert failed; will retry at shutdown")
+                                }
+                            }
+                        });
+                    }
                     Err(e) => warn!("  Failed to inject DNS fault: {}", e),
                 }
             }
@@ -1178,6 +1275,16 @@ async fn handle_run(
                 warn!("Unknown fault type '{}', skipping.", other);
             }
         }
+    }
+
+    // Revert any remaining active faults (graceful cleanup)
+    let active = tracker.active_count().await;
+    if active > 0 {
+        info!(
+            "🧹 Cleaning up {} active fault(s) before shutdown...",
+            active
+        );
+        tracker.revert_all(&fault_op).await;
     }
 
     // Stop probes
@@ -1765,6 +1872,7 @@ async fn run_single_simulation(
     };
     let fault_op =
         heisensim_k8s::FaultOperator::with_method(client.clone(), handle.clone(), k8s_method);
+    let tracker = std::sync::Arc::new(heisensim_k8s::FaultTracker::new());
     let mut rng = StdRng::seed_from_u64(seed);
     let fault_interval = duration / 4;
     let mut elapsed = std::time::Duration::ZERO;
@@ -1798,9 +1906,30 @@ async fn run_single_simulation(
             "latency" => {
                 let delay: u32 = rng.random_range(200..700);
                 let jitter: u32 = rng.random_range(50..150);
-                let _ = fault_op
+                if let Ok(id) = fault_op
                     .inject_network_latency(namespace, &target.name, delay, jitter, 15.0)
-                    .await;
+                    .await
+                {
+                    let fault = heisensim_k8s::ActiveFault {
+                        fault_id: id,
+                        kind: heisensim_k8s::ActiveFaultKind::NetworkLatency,
+                        namespace: namespace.to_string(),
+                        pod_name: target.name.clone(),
+                        injected_at: std::time::Instant::now(),
+                    };
+                    tracker.track(fault).await;
+                    let t = tracker.clone();
+                    let fo = fault_op.clone();
+                    let ns = namespace.to_string();
+                    let pn = target.name.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                        match fo.revert_network_latency(&ns, &pn, id).await {
+                            Ok(()) => t.untrack(id).await,
+                            Err(e) => warn!(fault_id = %id, error = %e, "Timed revert failed"),
+                        }
+                    });
+                }
             }
             "partition" => {
                 let other_pods: Vec<_> = ready_pods
@@ -1809,9 +1938,33 @@ async fn run_single_simulation(
                     .collect();
                 if let Some(other) = other_pods.first() {
                     let other_ip = other.pod_ip.as_deref().unwrap_or("10.0.0.1");
-                    let _ = fault_op
+                    if let Ok(id) = fault_op
                         .inject_partition(namespace, &target.name, other_ip, 20.0)
-                        .await;
+                        .await
+                    {
+                        let fault = heisensim_k8s::ActiveFault {
+                            fault_id: id,
+                            kind: heisensim_k8s::ActiveFaultKind::Partition {
+                                target_ip: other_ip.to_string(),
+                            },
+                            namespace: namespace.to_string(),
+                            pod_name: target.name.clone(),
+                            injected_at: std::time::Instant::now(),
+                        };
+                        tracker.track(fault).await;
+                        let t = tracker.clone();
+                        let fo = fault_op.clone();
+                        let ns = namespace.to_string();
+                        let pn = target.name.clone();
+                        let ip = other_ip.to_string();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                            match fo.revert_partition(&ns, &pn, &ip, id).await {
+                                Ok(()) => t.untrack(id).await,
+                                Err(e) => warn!(fault_id = %id, error = %e, "Timed revert failed"),
+                            }
+                        });
+                    }
                 }
             }
             "stress" => {
@@ -2772,6 +2925,30 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
         handle.clone(),
         heisensim_k8s::InjectMethod::Debug,
     );
+
+    // Initialize fault tracker for graceful shutdown
+    let tracker = std::sync::Arc::new(heisensim_k8s::FaultTracker::new());
+
+    // SIGINT handler — revert all active faults before exiting
+    let shutdown_tracker = tracker.clone();
+    let shutdown_fault_op = fault_op.clone();
+    let shutdown_cancel = cancel_tx.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            warn!("⚠️  SIGINT received — reverting all active faults...");
+            let _ = shutdown_cancel.send(true);
+            let results = shutdown_tracker.revert_all(&shutdown_fault_op).await;
+            let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+            if failed > 0 {
+                warn!(
+                    "⚠️  {} faults could not be reverted — manual intervention may be required!",
+                    failed
+                );
+            }
+            std::process::exit(130);
+        }
+    });
+
     let resolved_faults = resolve_faults(&args.faults, None);
     let mut rng = StdRng::seed_from_u64(seed);
     let fault_interval = duration / 4;
@@ -2813,7 +2990,30 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
                     .inject_network_latency(&ctx.namespace, &target.name, delay, jitter, 15.0)
                     .await
                 {
-                    Ok(id) => info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter),
+                    Ok(id) => {
+                        info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter);
+                        let fault = heisensim_k8s::ActiveFault {
+                            fault_id: id,
+                            kind: heisensim_k8s::ActiveFaultKind::NetworkLatency,
+                            namespace: ctx.namespace.clone(),
+                            pod_name: target.name.clone(),
+                            injected_at: std::time::Instant::now(),
+                        };
+                        tracker.track(fault).await;
+                        let t = tracker.clone();
+                        let fo = fault_op.clone();
+                        let ns = ctx.namespace.clone();
+                        let pn = target.name.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            match fo.revert_network_latency(&ns, &pn, id).await {
+                                Ok(()) => t.untrack(id).await,
+                                Err(e) => {
+                                    warn!(fault_id = %id, error = %e, "Timed revert failed; will retry at shutdown")
+                                }
+                            }
+                        });
+                    }
                     Err(e) => warn!("  Failed to inject latency: {}", e),
                 }
             }
@@ -2830,7 +3030,31 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
                         .await
                     {
                         Ok(id) => {
-                            info!("  Fault {}: {} ↛ {} for 20s", id, target.name, other.name)
+                            info!("  Fault {}: {} ↛ {} for 20s", id, target.name, other.name);
+                            let fault = heisensim_k8s::ActiveFault {
+                                fault_id: id,
+                                kind: heisensim_k8s::ActiveFaultKind::Partition {
+                                    target_ip: other_ip.to_string(),
+                                },
+                                namespace: ctx.namespace.clone(),
+                                pod_name: target.name.clone(),
+                                injected_at: std::time::Instant::now(),
+                            };
+                            tracker.track(fault).await;
+                            let t = tracker.clone();
+                            let fo = fault_op.clone();
+                            let ns = ctx.namespace.clone();
+                            let pn = target.name.clone();
+                            let ip = other_ip.to_string();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                                match fo.revert_partition(&ns, &pn, &ip, id).await {
+                                    Ok(()) => t.untrack(id).await,
+                                    Err(e) => {
+                                        warn!(fault_id = %id, error = %e, "Timed revert failed; will retry at shutdown")
+                                    }
+                                }
+                            });
                         }
                         Err(e) => warn!("  Failed to inject partition: {}", e),
                     }
@@ -2844,7 +3068,30 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
                     .inject_dns_failure(&ctx.namespace, &target.name, 15.0)
                     .await
                 {
-                    Ok(id) => info!("  Fault {}: DNS blocked for 15s", id),
+                    Ok(id) => {
+                        info!("  Fault {}: DNS blocked for 15s", id);
+                        let fault = heisensim_k8s::ActiveFault {
+                            fault_id: id,
+                            kind: heisensim_k8s::ActiveFaultKind::DnsFailure,
+                            namespace: ctx.namespace.clone(),
+                            pod_name: target.name.clone(),
+                            injected_at: std::time::Instant::now(),
+                        };
+                        tracker.track(fault).await;
+                        let t = tracker.clone();
+                        let fo = fault_op.clone();
+                        let ns = ctx.namespace.clone();
+                        let pn = target.name.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            match fo.revert_dns_failure(&ns, &pn, id).await {
+                                Ok(()) => t.untrack(id).await,
+                                Err(e) => {
+                                    warn!(fault_id = %id, error = %e, "Timed revert failed; will retry at shutdown")
+                                }
+                            }
+                        });
+                    }
                     Err(e) => warn!("  Failed to inject DNS fault: {}", e),
                 }
             }
@@ -2854,7 +3101,17 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
         }
     }
 
-    // 15. Stop probes
+    // 15. Revert any remaining active faults
+    let active = tracker.active_count().await;
+    if active > 0 {
+        info!(
+            "🧹 Cleaning up {} active fault(s) before shutdown...",
+            active
+        );
+        tracker.revert_all(&fault_op).await;
+    }
+
+    // 16. Stop probes
     info!("Stopping probes...");
     let _ = cancel_tx.send(true);
     let _ = probe_handle.await;

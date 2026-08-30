@@ -5,7 +5,6 @@ use kube::{
     Client,
     api::{Api, DeleteParams},
 };
-use std::time::Duration;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -21,6 +20,7 @@ pub enum InjectMethod {
 }
 
 /// Handles fault injection operations against Kubernetes pods.
+#[derive(Clone)]
 pub struct FaultOperator {
     client: Client,
     timeline: TimelineHandle,
@@ -346,22 +346,8 @@ impl FaultOperator {
         });
         record_fault_injected("network_latency", &target);
 
-        // Spawn background task to revert after duration
-        let client_clone = self.client.clone();
-        let timeline_clone = self.timeline.clone();
-        let ns = namespace.to_string();
-        let pn = pod_name.to_string();
-
-        let inject_method = self.inject_method;
-
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs_f64(duration_secs)).await;
-
-            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
-            if let Err(e) = op.revert_network_latency(&ns, &pn, fault_id).await {
-                warn!(pod = pn.as_str(), error = %e, "Failed to revert network latency");
-            }
-        });
+        // NOTE: Caller is responsible for tracking this fault and scheduling revert
+        // via FaultTracker. No detached background task — prevents orphaned tc rules.
 
         Ok(fault_id)
     }
@@ -427,23 +413,8 @@ impl FaultOperator {
         });
         record_fault_injected("network_partition", &target);
 
-        // Spawn background task to revert
-        let client_clone = self.client.clone();
-        let timeline_clone = self.timeline.clone();
-        let ns = namespace.to_string();
-        let pa = pod_a.to_string();
-        let pip = pod_b_ip.to_string();
-
-        let inject_method = self.inject_method;
-
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs_f64(duration_secs)).await;
-
-            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
-            if let Err(e) = op.revert_partition(&ns, &pa, &pip, fault_id).await {
-                warn!(pod = pa.as_str(), error = %e, "Failed to revert partition");
-            }
-        });
+        // NOTE: Caller is responsible for tracking this fault and scheduling revert
+        // via FaultTracker. No detached background task — prevents orphaned iptables rules.
 
         Ok(fault_id)
     }
@@ -504,20 +475,22 @@ impl FaultOperator {
         record_fault_injected("stress", &target);
         drop(_guard); // Drop span before async spawn setup
 
-        let client_clone = self.client.clone();
-        let timeline_clone = self.timeline.clone();
-        let ns = namespace.to_string();
-        let pn = pod_name.to_string();
-        let inject_method = self.inject_method;
-
         let cpu_str = cpu_workers.to_string();
         let mem_str = mem_bytes.to_string();
-        let duration_str = duration_secs.to_string();
+        let duration_str = format!("{}s", duration_secs);
+
+        // Run stress-ng inline (it self-terminates after --timeout).
+        // Caller tracks via FaultTracker for bookkeeping.
+        let op_clone = FaultOperator::with_method(
+            self.client.clone(),
+            self.timeline.clone(),
+            self.inject_method,
+        );
+        let ns = namespace.to_string();
+        let pn = pod_name.to_string();
 
         tokio::spawn(async move {
-            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
-            let duration_formatted = format!("{}s", duration_str);
-            let command = vec![
+            let command: Vec<&str> = vec![
                 "stress-ng",
                 "--cpu",
                 &cpu_str,
@@ -526,17 +499,19 @@ impl FaultOperator {
                 "--vm-bytes",
                 &mem_str,
                 "--timeout",
-                &duration_formatted,
+                &duration_str,
                 "--quiet",
             ];
 
-            if let Err(e) = op.exec_network_command(&ns, &pn, &command).await {
+            if let Err(e) = op_clone.exec_network_command(&ns, &pn, &command).await {
                 warn!(pod = pn.as_str(), error = %e, "Failed to inject stress");
             } else {
                 record_fault_reverted("stress", &pn);
             }
 
-            op.timeline.emit(EventKind::FaultReverted { fault_id });
+            op_clone
+                .timeline
+                .emit(EventKind::FaultReverted { fault_id });
             info!(pod = pn.as_str(), "Stress completed");
         });
 
@@ -607,20 +582,8 @@ impl FaultOperator {
         });
         record_fault_injected("dns_failure", &target);
 
-        let client_clone = self.client.clone();
-        let timeline_clone = self.timeline.clone();
-        let ns = namespace.to_string();
-        let pn = pod_name.to_string();
-        let inject_method = self.inject_method;
-
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs_f64(duration_secs)).await;
-
-            let op = FaultOperator::with_method(client_clone, timeline_clone, inject_method);
-            if let Err(e) = op.revert_dns_failure(&ns, &pn, fault_id).await {
-                warn!(pod = pn.as_str(), error = %e, "Failed to revert DNS failure");
-            }
-        });
+        // NOTE: Caller is responsible for tracking this fault and scheduling revert
+        // via FaultTracker. No detached background task — prevents orphaned iptables rules.
 
         Ok(fault_id)
     }
