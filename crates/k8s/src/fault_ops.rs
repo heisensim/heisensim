@@ -27,15 +27,27 @@ pub struct FaultOperator {
     inject_method: InjectMethod,
 }
 
+use opentelemetry::metrics::Counter;
+use std::sync::LazyLock;
+
+static FAULT_INJECTED_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    opentelemetry::global::meter("heisensim")
+        .u64_counter("heisensim.fault.injected_total")
+        .with_description("Total fault injections by kind and target")
+        .build()
+});
+
+static FAULT_REVERTED_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    opentelemetry::global::meter("heisensim")
+        .u64_counter("heisensim.fault.reverted_total")
+        .with_description("Total fault reverts by kind and target")
+        .build()
+});
+
 /// Record a fault injection metric via the global OTel meter.
 /// No-op if no `--otel-endpoint` is configured.
 fn record_fault_injected(fault_kind: &str, target: &str) {
-    let meter = opentelemetry::global::meter("heisensim");
-    let counter = meter
-        .u64_counter("heisensim.fault.injected_total")
-        .with_description("Total fault injections by kind and target")
-        .build();
-    counter.add(
+    FAULT_INJECTED_COUNTER.add(
         1,
         &[
             opentelemetry::KeyValue::new("fault_kind", fault_kind.to_string()),
@@ -46,12 +58,7 @@ fn record_fault_injected(fault_kind: &str, target: &str) {
 
 /// Record a fault revert metric via the global OTel meter.
 fn record_fault_reverted(fault_kind: &str, target: &str) {
-    let meter = opentelemetry::global::meter("heisensim");
-    let counter = meter
-        .u64_counter("heisensim.fault.reverted_total")
-        .with_description("Total fault reverts by kind and target")
-        .build();
-    counter.add(
+    FAULT_REVERTED_COUNTER.add(
         1,
         &[
             opentelemetry::KeyValue::new("fault_kind", fault_kind.to_string()),
@@ -204,10 +211,12 @@ impl FaultOperator {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if !output.status.success() {
-            warn!(
-                pod = pod_name,
-                stderr = stderr.as_str(),
-                "kubectl exec failed"
+            anyhow::bail!(
+                "kubectl exec failed on {}/{} (status: {}): {}",
+                namespace,
+                pod_name,
+                output.status,
+                stderr.trim()
             );
         }
 
@@ -260,10 +269,12 @@ impl FaultOperator {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if !output.status.success() {
-            warn!(
-                pod = pod_name,
-                stderr = stderr.as_str(),
-                "kubectl debug failed"
+            anyhow::bail!(
+                "kubectl debug failed on {}/{} (status: {}): {}",
+                namespace,
+                pod_name,
+                output.status,
+                stderr.trim()
             );
         }
 

@@ -5,8 +5,8 @@ use crate::http::check_http;
 use crate::tcp::check_tcp;
 use heisensim_timeline::{EventKind, TimelineHandle};
 use tokio::sync::watch;
-use tokio::time::sleep;
-use tracing::info;
+use tokio::time::MissedTickBehavior;
+use tracing::{Instrument, info};
 
 /// Orchestrates the execution of multiple health probes.
 pub struct ProbeRunner {
@@ -22,23 +22,32 @@ impl ProbeRunner {
 
     /// Spawns the probes and runs them concurrently until a cancellation signal is received.
     pub fn run(&self, cancel: watch::Receiver<bool>) -> anyhow::Result<()> {
+        // Initialize OTel instruments once (no-op if no --otel-endpoint)
+        let meter = opentelemetry::global::meter("heisensim");
+        let latency_hist = meter
+            .f64_histogram("heisensim.probe.latency_ms")
+            .with_description("Probe latency in milliseconds")
+            .build();
+        let probe_counter = meter
+            .u64_counter("heisensim.probe.count")
+            .with_description("Probe execution count by status")
+            .build();
+
         for probe in &self.probes {
             let probe = probe.clone();
             let timeline = self.timeline.clone();
             let mut cancel = cancel.clone();
+            let latency_hist = latency_hist.clone();
+            let probe_counter = probe_counter.clone();
 
             tokio::spawn(async move {
                 let name = probe.name().to_string();
+                let mut ticker = tokio::time::interval(probe.interval());
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // Consume the first immediate tick
+                ticker.tick().await;
 
                 loop {
-                    let interval = probe.interval();
-                    let span = tracing::info_span!(
-                        "probe.cycle",
-                        probe.name = %name,
-                        probe.interval_ms = interval.as_millis() as u64,
-                    );
-                    let _guard = span.enter();
-
                     tokio::select! {
                         _ = cancel.changed() => {
                             if *cancel.borrow() {
@@ -46,13 +55,23 @@ impl ProbeRunner {
                                 break;
                             }
                         }
-                        _ = sleep(probe.interval()) => {
-                            let result = match &probe {
-                                ProbeConfig::Http(c) => check_http(c).await,
-                                ProbeConfig::Tcp(c) => check_tcp(c).await,
-                                ProbeConfig::Grpc(c) => check_grpc(c).await,
-                                ProbeConfig::Exec(c) => check_exec(c).await,
-                            };
+                        _ = ticker.tick() => {
+                            let span = tracing::info_span!(
+                                "probe.cycle",
+                                probe.name = %name,
+                                probe.interval_ms = probe.interval().as_millis() as u64,
+                            );
+
+                            let result = async {
+                                match &probe {
+                                    ProbeConfig::Http(c) => check_http(c).await,
+                                    ProbeConfig::Tcp(c) => check_tcp(c).await,
+                                    ProbeConfig::Grpc(c) => check_grpc(c).await,
+                                    ProbeConfig::Exec(c) => check_exec(c).await,
+                                }
+                            }
+                            .instrument(span)
+                            .await;
 
                             let (event_kind, status_label) = if result.success {
                                 (EventKind::ProbeSuccess {
@@ -72,17 +91,6 @@ impl ProbeRunner {
                                     latency_ms: Some(result.latency.as_millis() as u64),
                                 }, "failure")
                             };
-
-                            // Streaming OTel metrics (no-op if no --otel-endpoint)
-                            let meter = opentelemetry::global::meter("heisensim");
-                            let latency_hist = meter
-                                .f64_histogram("heisensim.probe.latency_ms")
-                                .with_description("Probe latency in milliseconds")
-                                .build();
-                            let probe_counter = meter
-                                .u64_counter("heisensim.probe.count")
-                                .with_description("Probe execution count by status")
-                                .build();
 
                             let attrs = [
                                 opentelemetry::KeyValue::new("probe", name.clone()),

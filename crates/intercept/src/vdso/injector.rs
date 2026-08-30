@@ -7,7 +7,7 @@
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(target_os = "linux")]
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::control::{InjectionHandle, TimeControl};
 
@@ -42,104 +42,111 @@ pub fn inject(config: &InjectionConfig) -> Result<InjectionHandle> {
     // Step 1: Attach via ptrace
     ptrace_attach(pid)?;
 
-    // Everything from here is in a closure so we can detach on error
-    let result = (|| -> Result<InjectionHandle> {
-        // Step 2: Find vDSO mapping
-        let vdso = maps::find_vdso(pid)?;
-        debug!(
-            pid,
-            start = format!("0x{:x}", vdso.start),
-            end = format!("0x{:x}", vdso.end),
-            "found vDSO mapping"
-        );
-
-        // Step 3: Read vDSO bytes
-        let vdso_bytes = read_proc_mem(pid, vdso.start, vdso.size())?;
-        debug!(pid, size = vdso_bytes.len(), "read vDSO bytes");
-
-        // Step 4: Find __vdso_clock_gettime
-        let sym = elf::find_clock_gettime(&vdso_bytes, vdso.start)?;
-        let fn_addr = vdso.start + sym.offset;
-        info!(pid, symbol = %sym.name, addr = format!("0x{:x}", fn_addr), size = sym.size, "found clock_gettime");
-
-        // Step 5: Allocate memory in target for payload + shm + saved bytes
-        let tramp_size = trampoline::trampoline_size();
-        let payload_code = trampoline::generate_x86_64_payload(
-            0, // placeholder shm_addr — we'll patch after allocation
-            0, // placeholder original_bytes_addr
-            fn_addr + tramp_size as u64,
-            0, // placeholder base_time_addr
-        );
-
-        // Layout of allocated region:
-        //   [0..payload_size)           = payload code
-        //   [payload_size..+ctrl_size)  = TimeControl shared memory
-        //   [+ctrl_size..+tramp_size)   = saved original bytes
-        //   [+tramp_size..+8)           = base real time snapshot
-        let payload_size = payload_code.len();
-        let ctrl_size = TimeControl::SIZE;
-        let total_size = payload_size + ctrl_size + tramp_size + 8;
-
-        // Allocate via ptrace mmap syscall injection
-        let alloc_addr = ptrace_mmap(pid, total_size)?;
-        debug!(
-            pid,
-            addr = format!("0x{:x}", alloc_addr),
-            size = total_size,
-            "allocated payload region"
-        );
-
-        let shm_addr = alloc_addr + payload_size as u64;
-        let saved_bytes_addr = shm_addr + ctrl_size as u64;
-        let base_time_addr = saved_bytes_addr + tramp_size as u64;
-
-        // Re-generate payload with real addresses
-        let payload_code = trampoline::generate_x86_64_payload(
-            shm_addr,
-            saved_bytes_addr,
-            fn_addr + tramp_size as u64,
-            base_time_addr,
-        );
-
-        // Step 6: Write payload to allocated region
-        write_proc_mem(pid, alloc_addr, &payload_code)?;
-        debug!(pid, "wrote payload code");
-
-        // Write TimeControl
-        let ctrl_bytes = config.time_control.to_bytes();
-        write_proc_mem(pid, shm_addr, &ctrl_bytes)?;
-        debug!(pid, "wrote TimeControl: {}", config.time_control);
-
-        // Step 7: Save original function bytes
-        let original_bytes = read_proc_mem(pid, fn_addr, tramp_size)?;
-        write_proc_mem(pid, saved_bytes_addr, &original_bytes)?;
-        debug!(pid, "saved {} original bytes", tramp_size);
-
-        // Step 8: Write trampoline JMP
-        let trampoline_bytes = trampoline::generate_trampoline(alloc_addr)?;
-        write_proc_mem(pid, fn_addr, &trampoline_bytes)?;
-        info!(
-            pid,
-            "trampoline installed at 0x{:x} → 0x{:x}", fn_addr, alloc_addr
-        );
-
-        Ok(InjectionHandle {
-            pid,
-            shm_addr,
-            payload_addr: alloc_addr,
-            original_bytes,
-            trampoline_addr: fn_addr,
-            allocated_size: total_size,
-            allocated_addr: alloc_addr,
-        })
-    })();
-
-    // Always detach, even on error
-    if let Err(e) = ptrace_detach(pid) {
-        warn!(pid, error = %e, "failed to detach after injection");
+    // Drop guard guarantees detach even if we panic
+    struct DetachGuard(u32);
+    impl Drop for DetachGuard {
+        fn drop(&mut self) {
+            if let Err(e) = ptrace_detach(self.0) {
+                // Can't use tracing in Drop during panic, but we try our best
+                eprintln!("heisensim: failed to ptrace detach pid {}: {}", self.0, e);
+            }
+        }
     }
+    let guard = DetachGuard(pid);
 
-    result
+    // Step 2: Find vDSO mapping
+    let vdso = maps::find_vdso(pid)?;
+    debug!(
+        pid,
+        start = format!("0x{:x}", vdso.start),
+        end = format!("0x{:x}", vdso.end),
+        "found vDSO mapping"
+    );
+
+    // Step 3: Read vDSO bytes
+    let vdso_bytes = read_proc_mem(pid, vdso.start, vdso.size())?;
+    debug!(pid, size = vdso_bytes.len(), "read vDSO bytes");
+
+    // Step 4: Find __vdso_clock_gettime
+    let sym = elf::find_clock_gettime(&vdso_bytes, vdso.start)?;
+    let fn_addr = vdso.start + sym.offset;
+    info!(pid, symbol = %sym.name, addr = format!("0x{:x}", fn_addr), size = sym.size, "found clock_gettime");
+
+    // Step 5: Allocate memory in target for payload + shm + saved bytes
+    let tramp_size = trampoline::trampoline_size();
+    let payload_code = trampoline::generate_x86_64_payload(
+        0, // placeholder shm_addr — we'll patch after allocation
+        0, // placeholder original_bytes_addr
+        fn_addr + tramp_size as u64,
+        0, // placeholder base_time_addr
+    );
+
+    // Layout of allocated region:
+    //   [0..payload_size)           = payload code
+    //   [payload_size..+ctrl_size)  = TimeControl shared memory
+    //   [+ctrl_size..+tramp_size)   = saved original bytes
+    //   [+tramp_size..+8)           = base real time snapshot
+    let payload_size = payload_code.len();
+    let ctrl_size = TimeControl::SIZE;
+    let total_size = payload_size + ctrl_size + tramp_size + 8;
+
+    // Allocate via ptrace mmap syscall injection
+    let alloc_addr = ptrace_mmap(pid, total_size)?;
+    debug!(
+        pid,
+        addr = format!("0x{:x}", alloc_addr),
+        size = total_size,
+        "allocated payload region"
+    );
+
+    let shm_addr = alloc_addr + payload_size as u64;
+    let saved_bytes_addr = shm_addr + ctrl_size as u64;
+    let base_time_addr = saved_bytes_addr + tramp_size as u64;
+
+    // Re-generate payload with real addresses
+    let payload_code = trampoline::generate_x86_64_payload(
+        shm_addr,
+        saved_bytes_addr,
+        fn_addr + tramp_size as u64,
+        base_time_addr,
+    );
+
+    // Step 6: Write payload to allocated region
+    write_proc_mem(pid, alloc_addr, &payload_code)?;
+    debug!(pid, "wrote payload code");
+
+    // Write TimeControl
+    let ctrl_bytes = config.time_control.to_bytes();
+    write_proc_mem(pid, shm_addr, &ctrl_bytes)?;
+    debug!(pid, "wrote TimeControl: {}", config.time_control);
+
+    // Step 7: Save original function bytes
+    let original_bytes = read_proc_mem(pid, fn_addr, tramp_size)?;
+    write_proc_mem(pid, saved_bytes_addr, &original_bytes)?;
+    debug!(pid, "saved {} original bytes", tramp_size);
+
+    // Step 8: Write trampoline JMP
+    let trampoline_bytes = trampoline::generate_trampoline(alloc_addr)?;
+    write_proc_mem(pid, fn_addr, &trampoline_bytes)?;
+    info!(
+        pid,
+        "trampoline installed at 0x{:x} → 0x{:x}", fn_addr, alloc_addr
+    );
+
+    let handle = InjectionHandle {
+        pid,
+        shm_addr,
+        payload_addr: alloc_addr,
+        original_bytes,
+        trampoline_addr: fn_addr,
+        allocated_size: total_size,
+        allocated_addr: alloc_addr,
+    };
+
+    // Explicitly detach (guard consumed)
+    drop(guard);
+
+    Ok(handle)
 }
 
 /// Revert a previous injection — restore original vDSO bytes.
@@ -150,27 +157,31 @@ pub fn revert(handle: &InjectionHandle) -> Result<()> {
 
     ptrace_attach(pid)?;
 
-    let result = (|| -> Result<()> {
-        // Restore original bytes
-        write_proc_mem(pid, handle.trampoline_addr, &handle.original_bytes)?;
-        debug!(
-            pid,
-            "restored original bytes at 0x{:x}", handle.trampoline_addr
-        );
-
-        // Free allocated memory
-        ptrace_munmap(pid, handle.allocated_addr, handle.allocated_size)?;
-        debug!(pid, "freed allocated region");
-
-        info!(pid, "vDSO injection reverted");
-        Ok(())
-    })();
-
-    if let Err(e) = ptrace_detach(pid) {
-        warn!(pid, error = %e, "failed to detach after revert");
+    struct DetachGuard(u32);
+    impl Drop for DetachGuard {
+        fn drop(&mut self) {
+            if let Err(e) = ptrace_detach(self.0) {
+                eprintln!("heisensim: failed to ptrace detach pid {}: {}", self.0, e);
+            }
+        }
     }
+    let guard = DetachGuard(pid);
 
-    result
+    // Restore original bytes
+    write_proc_mem(pid, handle.trampoline_addr, &handle.original_bytes)?;
+    debug!(
+        pid,
+        "restored original bytes at 0x{:x}", handle.trampoline_addr
+    );
+
+    // Free allocated memory
+    ptrace_munmap(pid, handle.allocated_addr, handle.allocated_size)?;
+    debug!(pid, "freed allocated region");
+
+    info!(pid, "vDSO injection reverted");
+
+    drop(guard);
+    Ok(())
 }
 
 /// Update the TimeControl in a previously injected process.
@@ -180,8 +191,17 @@ pub fn update_time(handle: &InjectionHandle, control: &TimeControl) -> Result<()
     // but to be safe we attach briefly.
     let pid = handle.pid;
     ptrace_attach(pid)?;
+
+    struct DetachGuard(u32);
+    impl Drop for DetachGuard {
+        fn drop(&mut self) {
+            let _ = ptrace_detach(self.0);
+        }
+    }
+    let guard = DetachGuard(pid);
+
     let result = write_proc_mem(pid, handle.shm_addr, &control.to_bytes());
-    let _ = ptrace_detach(pid);
+    drop(guard);
     result.context("updating TimeControl in shared memory")
 }
 
