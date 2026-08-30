@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-08-30
+
+### Added
+- **A/B Baseline Diffing**: Instead of requiring absolute SLA numbers upfront,
+  `--baseline` captures probe metrics during warmup and asserts chaos-phase
+  degradation stays within bounds. New flags: `--max-latency-multiplier` (default
+  3.0×), `--max-availability-drop` (default 10pp), `--export-baseline <file.json>`
+  for CI drift tracking. Works with both `heisensim run` and `heisensim diverge run`.
+- **Diverge Preview Environment Integration**: `heisensim diverge run <env-name>`
+  runs chaos tests against Diverge preview environments with blast-radius targeting
+  (only changed services + upstream callers). Auto-discovers namespace, probes, and
+  routing headers from the Diverge API. Supports `--soft-fail` for CI trust-building.
+- **Fault Tracker with Graceful Shutdown**: All injected faults (latency, partition,
+  DNS) are tracked in a central `FaultTracker`. Ctrl+C triggers `revert_all()` with
+  30s timeout before exit. Timed reverts only untrack on success, so failed reverts
+  get a second chance at shutdown. Covers all three fault injection paths:
+  `handle_run`, `handle_diverge_run`, and `run_single_simulation`.
+
+### Fixed
+- **Hardening**: kubectl exit code checks (non-zero exits now error instead of
+  silently succeeding), OTel meter caching (avoids duplicate registrations), probe
+  timer accuracy (monotonic clock), tracing span safety (no panics on drop).
+- **Detached revert spawns removed**: Fault revert tasks no longer fire-and-forget
+  via `tokio::spawn`. Callers are responsible for scheduling reverts through the
+  FaultTracker, ensuring cleanup is never lost.
+- **FaultOperator now Clone**: Enables sharing across SIGINT handler and main loop.
+
 ## [0.14.0] - 2026-08-29
 
 ### Added
