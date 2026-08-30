@@ -89,6 +89,22 @@ impl ProbeConfig {
         };
         Duration::from_millis(ms)
     }
+
+    /// Injects extra headers into HTTP probe configs.
+    /// Used by Diverge integration to add routing headers (e.g. x-preview-env).
+    pub fn with_extra_headers(self, headers: &HashMap<String, String>) -> Self {
+        match self {
+            ProbeConfig::Http(mut c) => {
+                let h = c.headers.get_or_insert_with(HashMap::new);
+                for (k, v) in headers {
+                    h.insert(k.clone(), v.clone());
+                }
+                ProbeConfig::Http(c)
+            }
+            // Non-HTTP probes: no header injection (TCP/gRPC/Exec don't use HTTP headers)
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]

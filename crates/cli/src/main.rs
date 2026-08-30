@@ -2685,18 +2685,231 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
         }
     }
 
-    // 9. TODO: Wire into handle_run with DivergeContext for header injection + pod filtering
-    //    For now, log the resolved context and exit successfully.
-    info!(
-        "🎯 Diverge integration ready. Target services: {:?}",
-        target_services
-    );
-    info!("📋 Next step: wire DivergeContext into handle_run for header injection + pod filtering");
+    // 9. Connect to K8s
+    info!("Connecting to Kubernetes cluster...");
+    let k8s_client = kube::Client::try_default()
+        .await
+        .context("Failed to connect to Kubernetes. Is a cluster running?")?;
+    info!("Connected to cluster.");
 
-    if args.soft_fail {
-        info!("Soft-fail mode: exiting with code 0 regardless of test results");
+    // 10. Discover pods — filtered by target services (blast-radius targeting)
+    info!(
+        namespace = ctx.namespace.as_str(),
+        services = ?target_services,
+        "Discovering pods for target services..."
+    );
+    let pods = heisensim_k8s::discovery::discover_pods_for_services(
+        &k8s_client,
+        &ctx.namespace,
+        target_services,
+    )
+    .await?;
+    info!("Found {} pods for target services.", pods.len());
+    for pod in &pods {
+        info!("  Pod: {} (ready: {})", pod.name, pod.is_ready);
+    }
+
+    if pods.is_empty() {
+        warn!("No pods found for target services! Check that the services are deployed.");
+        return if args.soft_fail { Ok(0) } else { Ok(1) };
+    }
+
+    // 11. Scrape probes and inject Diverge routing headers
+    info!("Scraping probe configs from pod specs...");
+    let raw_probes =
+        heisensim_k8s::probe_scraper::scrape_probes(&k8s_client, &ctx.namespace).await?;
+
+    let routing_headers = {
+        let mut h = std::collections::HashMap::new();
+        h.insert(ctx.header_key.clone(), ctx.header_value.clone());
+        h
+    };
+
+    let probes: Vec<_> = raw_probes
+        .into_iter()
+        .map(|p| p.with_extra_headers(&routing_headers))
+        .collect();
+
+    info!(
+        "Discovered {} probes (with {} routing header injected):",
+        probes.len(),
+        ctx.header_key
+    );
+    for p in &probes {
+        info!("  - {}", p.name());
+    }
+
+    if probes.is_empty() {
+        warn!("No probes found! Make sure pods have readinessProbe or livenessProbe configured.");
+    }
+
+    // 12. Create timeline and start probe runner
+    let duration = parse_duration(&args.duration)?;
+    let seed = args.seed.unwrap_or_else(|| rand::rng().random());
+    let handle = heisensim_timeline::TimelineHandle::new();
+
+    handle.emit(heisensim_timeline::EventKind::SimulationStarted {
+        seed,
+        duration_secs: duration.as_secs_f64(),
+    });
+
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let probe_runner = heisensim_probe::ProbeRunner::new(probes, handle.clone());
+    let probe_handle = tokio::spawn(async move {
+        if let Err(e) = probe_runner.run(cancel_rx) {
+            warn!("Probe runner error: {}", e);
+        }
+    });
+
+    // 13. Warmup — let probes stabilize before injecting faults
+    info!("Warming up for 10s (letting probes stabilize)...");
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    info!("Warmup complete. Starting fault injection.");
+
+    // 14. Fault injection loop
+    let fault_op = heisensim_k8s::FaultOperator::with_method(
+        k8s_client.clone(),
+        handle.clone(),
+        heisensim_k8s::InjectMethod::Debug,
+    );
+    let resolved_faults = resolve_faults(&args.faults, None);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let fault_interval = duration / 4;
+    let mut elapsed = std::time::Duration::ZERO;
+
+    while elapsed < duration {
+        tokio::time::sleep(fault_interval).await;
+        elapsed += fault_interval;
+
+        if elapsed >= duration {
+            break;
+        }
+
+        // Re-discover live pods for target services
+        let live_pods = heisensim_k8s::discovery::discover_pods_for_services(
+            &k8s_client,
+            &ctx.namespace,
+            target_services,
+        )
+        .await?;
+        let ready_pods: Vec<_> = live_pods.iter().filter(|p| p.is_ready).collect();
+        if ready_pods.is_empty() {
+            warn!("No ready pods to target, skipping fault.");
+            continue;
+        }
+
+        let target_idx = rng.random_range(0..ready_pods.len());
+        let target = &ready_pods[target_idx];
+
+        let fault_idx = rng.random_range(0..resolved_faults.len());
+        let fault_type = &resolved_faults[fault_idx];
+
+        match fault_type.as_str() {
+            "latency" => {
+                info!("🌐 Injecting network latency on {}", target.name);
+                let delay: u32 = rng.random_range(200..700);
+                let jitter: u32 = rng.random_range(50..150);
+                match fault_op
+                    .inject_network_latency(&ctx.namespace, &target.name, delay, jitter, 15.0)
+                    .await
+                {
+                    Ok(id) => info!("  Fault {}: +{}ms (jitter {}ms) for 15s", id, delay, jitter),
+                    Err(e) => warn!("  Failed to inject latency: {}", e),
+                }
+            }
+            "partition" => {
+                info!("🔌 Injecting network partition on {}", target.name);
+                let other_pods: Vec<_> = ready_pods
+                    .iter()
+                    .filter(|p| p.name != target.name)
+                    .collect();
+                if let Some(other) = other_pods.first() {
+                    let other_ip = other.pod_ip.as_deref().unwrap_or("10.0.0.1");
+                    match fault_op
+                        .inject_partition(&ctx.namespace, &target.name, other_ip, 20.0)
+                        .await
+                    {
+                        Ok(id) => {
+                            info!("  Fault {}: {} ↛ {} for 20s", id, target.name, other.name)
+                        }
+                        Err(e) => warn!("  Failed to inject partition: {}", e),
+                    }
+                } else {
+                    warn!("  Only one pod, skipping partition.");
+                }
+            }
+            "dns" => {
+                info!("🌐 Injecting DNS blackhole on {}", target.name);
+                match fault_op
+                    .inject_dns_failure(&ctx.namespace, &target.name, 15.0)
+                    .await
+                {
+                    Ok(id) => info!("  Fault {}: DNS blocked for 15s", id),
+                    Err(e) => warn!("  Failed to inject DNS fault: {}", e),
+                }
+            }
+            other => {
+                warn!("Unknown or unsupported fault type '{}', skipping.", other);
+            }
+        }
+    }
+
+    // 15. Stop probes
+    info!("Stopping probes...");
+    let _ = cancel_tx.send(true);
+    let _ = probe_handle.await;
+
+    // 16. Evaluate results
+    let events = handle.events();
+    let summary = heisensim_timeline::query::summary(&events);
+    handle.emit(heisensim_timeline::EventKind::SimulationEnded {
+        total_faults: summary.total_faults,
+        total_failures: summary.total_failures,
+    });
+
+    let final_events = handle.events();
+    let exit_code = if summary.total_failures > 0 { 1 } else { 0 };
+
+    // 17. Output results
+    match args.output {
+        OutputFormat::Text => {
+            report::render_terminal_report(&final_events);
+            info!(
+                seed = seed,
+                faults = summary.total_faults,
+                failures = summary.total_failures,
+                env = args.env_name.as_str(),
+                "🏁 Diverge chaos test complete"
+            );
+        }
+        OutputFormat::Json => {
+            let output = serde_json::json!({
+                "seed": seed,
+                "environment": args.env_name,
+                "namespace": ctx.namespace,
+                "header": format!("{}: {}", ctx.header_key, ctx.header_value),
+                "target_services": target_services,
+                "duration_secs": duration.as_secs_f64(),
+                "total_faults": summary.total_faults,
+                "total_failures": summary.total_failures,
+                "passed": exit_code == 0,
+                "soft_fail": args.soft_fail,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        _ => {
+            report::render_terminal_report(&final_events);
+        }
+    }
+
+    // 18. Soft-fail: override exit code to 0
+    if args.soft_fail && exit_code != 0 {
+        info!(
+            "Soft-fail mode: {} failures detected but exiting with code 0.",
+            summary.total_failures
+        );
         Ok(0)
     } else {
-        Ok(0)
+        Ok(exit_code)
     }
 }

@@ -3,6 +3,7 @@ use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::{Api, Client, api::ListParams};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use tracing;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodInfo {
@@ -102,6 +103,58 @@ pub async fn discover_services(client: &Client, namespace: &str) -> Result<Vec<S
     }
 
     Ok(service_infos)
+}
+
+/// Discover pods that belong to specific services by matching their label selectors.
+///
+/// This enables Diverge blast-radius targeting: only discover pods belonging to
+/// the changed services, not all pods in the namespace.
+pub async fn discover_pods_for_services(
+    client: &Client,
+    namespace: &str,
+    service_names: &[String],
+) -> Result<Vec<PodInfo>> {
+    if service_names.is_empty() {
+        return discover_pods(client, namespace).await;
+    }
+
+    // First, discover all services and their label selectors
+    let all_services = discover_services(client, namespace).await?;
+
+    // Filter to only the target services
+    let target_selectors: Vec<&BTreeMap<String, String>> = all_services
+        .iter()
+        .filter(|s| service_names.contains(&s.name))
+        .filter(|s| !s.selector.is_empty())
+        .map(|s| &s.selector)
+        .collect();
+
+    if target_selectors.is_empty() {
+        tracing::warn!(
+            services = ?service_names,
+            "No matching service selectors found, falling back to all pods"
+        );
+        return discover_pods(client, namespace).await;
+    }
+
+    // Discover all pods and filter by matching ANY service selector
+    let all_pods = discover_pods(client, namespace).await?;
+    let filtered: Vec<PodInfo> = all_pods
+        .into_iter()
+        .filter(|pod| {
+            target_selectors
+                .iter()
+                .any(|selector| selector.iter().all(|(k, v)| pod.labels.get(k) == Some(v)))
+        })
+        .collect();
+
+    tracing::info!(
+        services = ?service_names,
+        pods = filtered.len(),
+        "Discovered pods for target services"
+    );
+
+    Ok(filtered)
 }
 
 #[cfg(test)]
