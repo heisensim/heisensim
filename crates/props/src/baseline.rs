@@ -69,7 +69,7 @@ pub fn capture_baseline(
 
     for event in events {
         if event.elapsed >= baseline_duration {
-            break; // Events are chronologically ordered
+            continue; // Skip events outside baseline window (may not be strictly ordered)
         }
 
         match &event.kind {
@@ -238,20 +238,57 @@ impl TimelineProperty for BaselineLatencyDiff {
         let mut worst_probe = String::new();
         let mut details = Vec::new();
         let mut any_exceeded = false;
+        let mut probes_evaluated = 0;
 
         for (probe_name, baseline) in &self.baseline.probes {
-            if baseline.p95_ms == 0 {
-                continue; // No baseline latency data
+            // Clamp zero baseline p95 to 1ms to avoid skipping sub-millisecond probes
+            let baseline_p95 = baseline.p95_ms.max(1);
+
+            // Warn on small sample sizes
+            let sample_count = baseline.latencies_ms.len();
+            if sample_count > 0 && sample_count < 20 {
+                details.push(format!(
+                    "⚠️  {}: only {} baseline samples (p95 ≈ max), consider longer warmup",
+                    probe_name, sample_count
+                ));
             }
 
-            let chaos_p95 = if let Some((mut latencies, _, _)) = chaos.get(probe_name).cloned() {
-                latencies.sort_unstable();
-                percentile(&latencies, 95)
-            } else {
-                continue; // Probe not seen during chaos phase
-            };
+            // Check if probe disappeared during chaos
+            let chaos_data = chaos.get(probe_name);
+            if chaos_data.is_none() {
+                // Probe existed in baseline but vanished during chaos — treat as failure
+                any_exceeded = true;
+                probes_evaluated += 1;
+                details.push(format!(
+                    "❌ {}: probe disappeared during chaos (0 events — possible crash/hang)",
+                    probe_name
+                ));
+                continue;
+            }
 
-            let multiplier = chaos_p95 as f64 / baseline.p95_ms as f64;
+            let (latencies, successes, failures) = chaos_data.unwrap();
+            let chaos_total = successes + failures;
+
+            // If probe had events but zero latency samples (all timeouts/failures), treat as degraded
+            if latencies.is_empty() {
+                if chaos_total > 0 {
+                    // 100% failure during chaos — treat as worst case
+                    any_exceeded = true;
+                    probes_evaluated += 1;
+                    details.push(format!(
+                        "❌ {}: 100% probe failure during chaos ({} failures, 0 latency samples)",
+                        probe_name, failures
+                    ));
+                }
+                continue;
+            }
+
+            let mut sorted = latencies.clone();
+            sorted.sort_unstable();
+            let chaos_p95 = percentile(&sorted, 95);
+
+            let multiplier = chaos_p95 as f64 / baseline_p95 as f64;
+            probes_evaluated += 1;
 
             let status = if multiplier > self.max_multiplier {
                 any_exceeded = true;
@@ -262,7 +299,7 @@ impl TimelineProperty for BaselineLatencyDiff {
 
             details.push(format!(
                 "{} {}: p95 {:.1}x (baseline {}ms → chaos {}ms)",
-                status, probe_name, multiplier, baseline.p95_ms, chaos_p95
+                status, probe_name, multiplier, baseline_p95, chaos_p95
             ));
 
             if multiplier > worst_multiplier {
@@ -271,8 +308,22 @@ impl TimelineProperty for BaselineLatencyDiff {
             }
         }
 
+        if probes_evaluated == 0 {
+            let expected = format!("p95 latency ≤ {:.1}x baseline", self.max_multiplier);
+            return PropertyVerdict::fail(
+                "baseline-latency",
+                expected,
+                "no probes evaluated".to_string(),
+            )
+            .with_details(details);
+        }
+
         let expected = format!("p95 latency ≤ {:.1}x baseline", self.max_multiplier);
-        let actual = format!("worst: {:.1}x on {}", worst_multiplier, worst_probe);
+        let actual = if worst_probe.is_empty() {
+            "all probes failed or disappeared".to_string()
+        } else {
+            format!("worst: {:.1}x on {}", worst_multiplier, worst_probe)
+        };
 
         if any_exceeded {
             PropertyVerdict::fail("baseline-latency", expected, actual).with_details(details)
@@ -322,21 +373,55 @@ impl TimelineProperty for BaselineAvailabilityDiff {
         let mut worst_probe = String::new();
         let mut details = Vec::new();
         let mut any_exceeded = false;
+        let mut probes_evaluated = 0;
 
         for (probe_name, baseline) in &self.baseline.probes {
-            let (chaos_successes, chaos_failures) = if let Some((_, s, f)) = chaos.get(probe_name) {
+            // Check if probe disappeared during chaos
+            let chaos_data = chaos.get(probe_name);
+            let (chaos_successes, chaos_failures) = if let Some((_, s, f)) = chaos_data {
                 (*s, *f)
             } else {
+                // Probe existed in baseline but vanished during chaos — treat as 0% availability
+                let drop_pp = baseline.success_rate; // e.g. 100% → 0% = 100pp drop
+                probes_evaluated += 1;
+                let exceeded = drop_pp > self.max_drop_pp;
+                if exceeded {
+                    any_exceeded = true;
+                }
+                let status = if exceeded { "❌" } else { "✅" };
+                details.push(format!(
+                    "{} {}: probe disappeared during chaos (baseline {:.1}% → chaos 0.0%)",
+                    status, probe_name, baseline.success_rate
+                ));
+                if drop_pp > worst_drop {
+                    worst_drop = drop_pp;
+                    worst_probe = probe_name.clone();
+                }
                 continue;
             };
 
             let chaos_total = chaos_successes + chaos_failures;
             if chaos_total == 0 {
+                // Had events but zero total — treat as disappeared
+                let drop_pp = baseline.success_rate;
+                if drop_pp > self.max_drop_pp {
+                    any_exceeded = true;
+                }
+                probes_evaluated += 1;
+                details.push(format!(
+                    "❌ {}: 0 probe events during chaos (baseline {:.1}% → chaos 0.0%)",
+                    probe_name, baseline.success_rate
+                ));
+                if drop_pp > worst_drop {
+                    worst_drop = drop_pp;
+                    worst_probe = probe_name.clone();
+                }
                 continue;
             }
 
             let chaos_rate = (chaos_successes as f64 / chaos_total as f64) * 100.0;
             let drop_pp = baseline.success_rate - chaos_rate;
+            probes_evaluated += 1;
 
             let status = if drop_pp > self.max_drop_pp {
                 any_exceeded = true;
@@ -360,12 +445,26 @@ impl TimelineProperty for BaselineAvailabilityDiff {
             }
         }
 
+        if probes_evaluated == 0 {
+            let expected = format!("availability drop ≤ {:.1}pp", self.max_drop_pp);
+            return PropertyVerdict::fail(
+                "baseline-availability",
+                expected,
+                "no probes evaluated".to_string(),
+            )
+            .with_details(details);
+        }
+
         let expected = format!("availability drop ≤ {:.1}pp", self.max_drop_pp);
-        let actual = format!(
-            "worst: {:.1}pp drop on {}",
-            worst_drop.max(0.0),
-            worst_probe
-        );
+        let actual = if worst_probe.is_empty() {
+            "no availability degradation detected".to_string()
+        } else {
+            format!(
+                "worst: {:.1}pp drop on {}",
+                worst_drop.max(0.0),
+                worst_probe
+            )
+        };
 
         if any_exceeded {
             PropertyVerdict::fail("baseline-availability", expected, actual).with_details(details)

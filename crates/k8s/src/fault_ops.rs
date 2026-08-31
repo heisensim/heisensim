@@ -94,7 +94,6 @@ impl FaultOperator {
         grace_period_secs: Option<u32>,
     ) -> Result<Uuid> {
         crate::fencing::validate_namespace(namespace)?;
-        crate::fencing::validate_namespace(namespace)?;
         let api: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -136,7 +135,6 @@ impl FaultOperator {
     /// Inject an eviction fault (tests PDBs).
     /// Returns `(fault_id, evicted)` where `evicted` is false if PDB blocked it.
     pub async fn inject_eviction(&self, namespace: &str, pod_name: &str) -> Result<(Uuid, bool)> {
-        crate::fencing::validate_namespace(namespace)?;
         crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
 
@@ -185,7 +183,6 @@ impl FaultOperator {
         command: &[&str],
     ) -> Result<String> {
         crate::fencing::validate_namespace(namespace)?;
-        crate::fencing::validate_namespace(namespace)?;
         match self.inject_method {
             InjectMethod::Exec => self.exec_in_pod(namespace, pod_name, command).await,
             InjectMethod::Debug => {
@@ -198,7 +195,7 @@ impl FaultOperator {
     /// Execute a command inside a pod using `kubectl exec` via tokio::process.
     ///
     /// Requires tc/iptables to be installed in the target container image.
-    async fn exec_in_pod(
+    pub(crate) async fn exec_in_pod(
         &self,
         namespace: &str,
         pod_name: &str,
@@ -263,7 +260,6 @@ impl FaultOperator {
                 pod_name,
                 "--image=nicolaka/netshoot:latest",
                 &format!("--container={}", debug_name),
-                "--target=", // share network namespace with first container
                 "--",
             ])
             .args(command)
@@ -301,7 +297,6 @@ impl FaultOperator {
         jitter_ms: u32,
         duration_secs: f64,
     ) -> Result<Uuid> {
-        crate::fencing::validate_namespace(namespace)?;
         crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -360,7 +355,6 @@ impl FaultOperator {
         fault_id: Uuid,
     ) -> Result<()> {
         crate::fencing::validate_namespace(namespace)?;
-        crate::fencing::validate_namespace(namespace)?;
         self.exec_network_command(
             namespace,
             pod_name,
@@ -382,7 +376,6 @@ impl FaultOperator {
         pod_b_ip: &str,
         duration_secs: f64,
     ) -> Result<Uuid> {
-        crate::fencing::validate_namespace(namespace)?;
         crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{} -> {}", namespace, pod_a, pod_b_ip);
@@ -428,7 +421,6 @@ impl FaultOperator {
         fault_id: Uuid,
     ) -> Result<()> {
         crate::fencing::validate_namespace(namespace)?;
-        crate::fencing::validate_namespace(namespace)?;
         self.exec_network_command(
             namespace,
             pod_name,
@@ -451,7 +443,6 @@ impl FaultOperator {
         mem_bytes: u64,
         duration_secs: f64,
     ) -> Result<Uuid> {
-        crate::fencing::validate_namespace(namespace)?;
         crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -526,7 +517,6 @@ impl FaultOperator {
         duration_secs: f64,
     ) -> Result<Uuid> {
         crate::fencing::validate_namespace(namespace)?;
-        crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
 
@@ -596,7 +586,6 @@ impl FaultOperator {
         fault_id: Uuid,
     ) -> Result<()> {
         crate::fencing::validate_namespace(namespace)?;
-        crate::fencing::validate_namespace(namespace)?;
         let mut errs = Vec::new();
 
         if let Err(e) = self
@@ -625,14 +614,13 @@ impl FaultOperator {
             errs.push(e);
         }
 
-        self.timeline.emit(EventKind::FaultReverted { fault_id });
-        info!(pod = pod_name, "Reverted DNS failure");
-
         if !errs.is_empty() {
             // Return first error, but we still attempted both
             return Err(errs.remove(0).context("Failed to revert DNS failure rules"));
         }
 
+        self.timeline.emit(EventKind::FaultReverted { fault_id });
+        info!(pod = pod_name, "Reverted DNS failure");
         record_fault_reverted("dns_failure", pod_name);
         Ok(())
     }

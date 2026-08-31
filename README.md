@@ -62,7 +62,7 @@ Download from [GitHub Releases](https://github.com/heisensim/heisensim/releases)
 ### Docker
 
 ```bash
-docker run ghcr.io/heisensim/heisensim:v0.12.0 simulate --seed 0x42 --duration 5m
+docker run ghcr.io/heisensim/heisensim:v0.15.0 simulate --seed 0x42 --duration 5m
 ```
 
 ### GitHub Action
@@ -165,6 +165,52 @@ Properties produce verdicts with details:
 | `dns_resolution` | DNS recovers within N seconds | `max_recovery_seconds` |
 | `steady_state` | System returns to steady state after fault | `max_recovery_seconds`, `baseline_seconds` |
 | `throughput` | Minimum requests per minute sustained | `min_per_minute`, `window_seconds` |
+
+### A/B Baseline Diffing (v0.15.0+)
+
+Don't know your SLA numbers? Use `--baseline` to automatically capture steady-state metrics during warmup and assert chaos-phase degradation stays within bounds:
+
+```bash
+# No SLA knowledge needed — heisensim measures your baseline automatically
+heisensim run --namespace myapp --baseline
+
+# With tuning:
+#   --max-latency-multiplier  chaos p95 ≤ Nx baseline
+#   --max-availability-drop   max Npp availability drop
+#   --export-baseline         export snapshot for CI drift tracking
+heisensim run --namespace myapp --baseline \
+  --max-latency-multiplier 3.0 \
+  --max-availability-drop 10.0 \
+  --export-baseline baseline.json
+```
+
+Output:
+```
+📊 Baseline captured: 3 probes, 45 total samples
+  http-check — p50: 42ms, p95: 68ms, avail: 100.0%
+  grpc-ping  — p50: 12ms, p95: 28ms, avail: 100.0%
+  dns-lookup — p50: 8ms, p95: 15ms, avail: 99.2%
+
+📊 Evaluating baseline diff properties...
+  ✅ http-check: p95 1.8x (baseline 68ms → chaos 122ms)
+  ✅ grpc-ping: p95 2.1x (baseline 28ms → chaos 59ms)
+  ❌ dns-lookup: p95 4.2x (baseline 15ms → chaos 63ms)
+```
+
+### Diverge Preview Environment Integration (v0.15.0+)
+
+Run chaos tests against [Diverge](https://diverge.dev) preview environments with blast-radius targeting:
+
+```bash
+# Chaos test only changed services + upstream callers in PR preview
+heisensim diverge run pr-123 --baseline --soft-fail
+
+# With explicit config
+heisensim diverge run my-feature-env \
+  --url https://diverge.example.com \
+  --duration 2m \
+  --baseline
+```
 
 ---
 
@@ -412,7 +458,8 @@ heisensim/
 - `v0.12.0` ✅ Property templates, connect-latency, port filtering, multi-thread tracing
 - `v0.13.0` ✅ `--name` process targeting, aarch64 ptrace support
 - `v0.14.0` ✅ Grafana dashboard, streaming OTel metrics, one-command observability stack
-- Future: mdbook docs, Diverge × heisensim integration
+- `v0.15.0` ✅ A/B baseline diffing, Diverge preview env integration, fault tracker + graceful shutdown
+- Future: mdbook docs site, golden baseline import, dead man's switch TTL
 
 ---
 
