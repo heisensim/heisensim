@@ -174,11 +174,14 @@ Don't know your SLA numbers? Use `--baseline` to automatically capture steady-st
 # No SLA knowledge needed — heisensim measures your baseline automatically
 heisensim run --namespace myapp --baseline
 
-# With tuning
+# With tuning:
+#   --max-latency-multiplier  chaos p95 ≤ Nx baseline
+#   --max-availability-drop   max Npp availability drop
+#   --export-baseline         export snapshot for CI drift tracking
 heisensim run --namespace myapp --baseline \
-  --max-latency-multiplier 3.0 \    # chaos p95 ≤ 3x baseline
-  --max-availability-drop 10.0 \    # max 10pp availability drop
-  --export-baseline baseline.json   # export for CI drift tracking
+  --max-latency-multiplier 3.0 \
+  --max-availability-drop 10.0 \
+  --export-baseline baseline.json
 ```
 
 Output:
@@ -204,7 +207,7 @@ heisensim diverge run pr-123 --baseline --soft-fail
 
 # With explicit config
 heisensim diverge run my-feature-env \
-  --diverge-url https://diverge.example.com \
+  --url https://diverge.example.com \
   --duration 2m \
   --baseline
 ```

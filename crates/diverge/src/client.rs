@@ -76,22 +76,22 @@ impl DivergeClient {
 
         if let Some(token) = &self.token {
             // Reject cleartext HTTP for non-loopback hosts (CWE-319)
-            if url.starts_with("http://") {
-                let is_loopback = match url::Url::parse(&url) {
-                    Ok(parsed) => match parsed.host() {
+            // Parse URL first — url crate normalizes scheme to lowercase
+            if let Ok(parsed) = url::Url::parse(&url) {
+                if parsed.scheme() == "http" {
+                    let is_loopback = match parsed.host() {
                         Some(url::Host::Domain(d)) => d == "localhost",
                         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
                         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
                         None => false,
-                    },
-                    Err(_) => false,
-                };
-                if !is_loopback {
-                    anyhow::bail!(
-                        "Refusing to send bearer token over unencrypted HTTP to '{}'.\n\
-                         Use HTTPS or connect to localhost for development.",
-                        self.base_url
-                    );
+                    };
+                    if !is_loopback {
+                        anyhow::bail!(
+                            "Refusing to send bearer token over unencrypted HTTP to '{}'.\n\
+                             Use HTTPS or connect to localhost for development.",
+                            self.base_url
+                        );
+                    }
                 }
             }
             req = req.header("Authorization", format!("Bearer {}", token));

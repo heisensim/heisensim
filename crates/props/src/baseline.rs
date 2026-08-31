@@ -383,9 +383,12 @@ impl TimelineProperty for BaselineAvailabilityDiff {
             } else {
                 // Probe existed in baseline but vanished during chaos — treat as 0% availability
                 let drop_pp = baseline.success_rate; // e.g. 100% → 0% = 100pp drop
-                any_exceeded = drop_pp > self.max_drop_pp;
                 probes_evaluated += 1;
-                let status = if any_exceeded { "❌" } else { "✅" };
+                let exceeded = drop_pp > self.max_drop_pp;
+                if exceeded {
+                    any_exceeded = true;
+                }
+                let status = if exceeded { "❌" } else { "✅" };
                 details.push(format!(
                     "{} {}: probe disappeared during chaos (baseline {:.1}% → chaos 0.0%)",
                     status, probe_name, baseline.success_rate
