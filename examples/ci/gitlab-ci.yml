@@ -2,7 +2,7 @@
 # Deterministic chaos testing — no cluster required
 chaos-test:
   stage: test
-  image: ghcr.io/heisensim/heisensim:v0.10.0
+  image: ghcr.io/heisensim/heisensim:v0.15.0
   script:
     - heisensim simulate --seed 0x42 --duration 5m --config heisensim.toml --output junit > chaos-results.xml || SIMULATE_FAILED=1
     - heisensim explore --simulate --seeds 100 --duration 5m --config heisensim.toml || EXPLORE_FAILED=1

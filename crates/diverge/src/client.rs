@@ -52,7 +52,11 @@ impl DivergeClient {
 
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to build HTTP client"),
             token: resolved_token,
         }
     }
@@ -72,15 +76,23 @@ impl DivergeClient {
 
         if let Some(token) = &self.token {
             // Reject cleartext HTTP for non-loopback hosts (CWE-319)
-            let is_loopback = url.contains("://localhost")
-                || url.contains("://127.0.0.1")
-                || url.contains("://[::1]");
-            if url.starts_with("http://") && !is_loopback {
-                anyhow::bail!(
-                    "Refusing to send bearer token over unencrypted HTTP to '{}'.\n\
-                     Use HTTPS or connect to localhost for development.",
-                    self.base_url
-                );
+            if url.starts_with("http://") {
+                let is_loopback = match url::Url::parse(&url) {
+                    Ok(parsed) => match parsed.host() {
+                        Some(url::Host::Domain(d)) => d == "localhost",
+                        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                        None => false,
+                    },
+                    Err(_) => false,
+                };
+                if !is_loopback {
+                    anyhow::bail!(
+                        "Refusing to send bearer token over unencrypted HTTP to '{}'.\n\
+                         Use HTTPS or connect to localhost for development.",
+                        self.base_url
+                    );
+                }
             }
             req = req.header("Authorization", format!("Bearer {}", token));
         }

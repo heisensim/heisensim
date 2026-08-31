@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -16,7 +17,7 @@ pub enum ActiveFaultKind {
     Partition { target_ip: String },
     /// DNS blackhole via iptables DROP on port 53
     DnsFailure,
-    /// CPU/memory stress via stress-ng (self-terminating, tracked for bookkeeping)
+    /// CPU/memory stress via stress-ng (killed on cleanup)
     Stress,
 }
 
@@ -40,8 +41,12 @@ pub struct ActiveFault {
 /// On SIGINT or test completion, `revert_all()` iterates through all tracked
 /// faults and calls the appropriate revert method. This prevents orphaned
 /// tc/iptables rules from being left on target pods.
+///
+/// Safety: uses an `AtomicBool` revert guard to prevent concurrent `revert_all`
+/// calls from draining the fault list and racing to exit.
 pub struct FaultTracker {
     active: Arc<Mutex<Vec<ActiveFault>>>,
+    reverting: AtomicBool,
 }
 
 impl FaultTracker {
@@ -49,6 +54,7 @@ impl FaultTracker {
     pub fn new() -> Self {
         Self {
             active: Arc::new(Mutex::new(Vec::new())),
+            reverting: AtomicBool::new(false),
         }
     }
 
@@ -77,15 +83,31 @@ impl FaultTracker {
 
     /// Forcibly revert ALL active faults. Used during graceful shutdown.
     ///
-    /// Returns a vec of (fault_id, result) for each revert attempt.
-    /// Uses a 30s total timeout — if K8s API is unreachable, logs loudly.
+    /// Uses an atomic guard to prevent concurrent calls from draining the list.
+    /// Reverts are parallelized across pods with a 10s per-pod timeout and
+    /// 30s total deadline.
     pub async fn revert_all(&self, fault_op: &FaultOperator) -> Vec<(Uuid, Result<()>)> {
+        // Guard: only one revert_all can run at a time
+        if self
+            .reverting
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            info!("Revert already in progress — waiting for completion");
+            // Spin-wait for the first caller to finish
+            while self.reverting.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            return Vec::new();
+        }
+
         let faults = {
             let mut active = self.active.lock().await;
             std::mem::take(&mut *active)
         };
 
         if faults.is_empty() {
+            self.reverting.store(false, Ordering::SeqCst);
             return Vec::new();
         }
 
@@ -94,87 +116,95 @@ impl FaultTracker {
             "🧹 Reverting all active faults (graceful shutdown)..."
         );
 
-        let mut results = Vec::new();
+        // Parallel reverts with per-pod timeout (10s) under a 30s total deadline
+        let per_pod_timeout = std::time::Duration::from_secs(10);
 
-        // 30s total timeout for all reverts
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut join_set = tokio::task::JoinSet::new();
 
         for fault in faults {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                warn!(
-                    fault_id = %fault.fault_id,
-                    pod = fault.pod_name.as_str(),
-                    "⚠️  Revert timeout reached — manual intervention may be required!"
-                );
-                results.push((
-                    fault.fault_id,
-                    Err(anyhow::anyhow!("Revert timeout exceeded")),
-                ));
-                continue;
-            }
+            let fo = fault_op.clone();
+            let fault_id = fault.fault_id;
+            let timeout = per_pod_timeout;
 
-            let result = tokio::time::timeout(remaining, async {
-                match &fault.kind {
-                    ActiveFaultKind::NetworkLatency => {
-                        fault_op
-                            .revert_network_latency(
+            join_set.spawn(async move {
+                let result = tokio::time::timeout(timeout, async {
+                    match &fault.kind {
+                        ActiveFaultKind::NetworkLatency => {
+                            fo.revert_network_latency(
                                 &fault.namespace,
                                 &fault.pod_name,
                                 fault.fault_id,
                             )
                             .await
-                    }
-                    ActiveFaultKind::Partition { target_ip } => {
-                        fault_op
-                            .revert_partition(
+                        }
+                        ActiveFaultKind::Partition { target_ip } => {
+                            fo.revert_partition(
                                 &fault.namespace,
                                 &fault.pod_name,
                                 target_ip,
                                 fault.fault_id,
                             )
                             .await
-                    }
-                    ActiveFaultKind::DnsFailure => {
-                        fault_op
-                            .revert_dns_failure(&fault.namespace, &fault.pod_name, fault.fault_id)
+                        }
+                        ActiveFaultKind::DnsFailure => {
+                            fo.revert_dns_failure(&fault.namespace, &fault.pod_name, fault.fault_id)
+                                .await
+                        }
+                        ActiveFaultKind::Stress => {
+                            // Kill stress-ng rather than assuming self-termination
+                            fo.exec_in_pod(
+                                &fault.namespace,
+                                &fault.pod_name,
+                                &["pkill", "-9", "stress-ng"],
+                            )
                             .await
+                            .ok(); // Best-effort kill
+                            Ok(())
+                        }
                     }
-                    ActiveFaultKind::Stress => {
-                        // Stress-ng is self-terminating; just emit revert event
-                        Ok(())
-                    }
-                }
-            })
-            .await;
+                })
+                .await;
 
-            match result {
-                Ok(Ok(())) => {
-                    info!(
-                        fault_id = %fault.fault_id,
-                        pod = fault.pod_name.as_str(),
-                        kind = ?fault.kind,
-                        "✅ Reverted fault"
-                    );
-                    results.push((fault.fault_id, Ok(())));
+                match result {
+                    Ok(Ok(())) => {
+                        info!(
+                            fault_id = %fault_id,
+                            pod = fault.pod_name.as_str(),
+                            kind = ?fault.kind,
+                            "✅ Reverted fault"
+                        );
+                        (fault_id, Ok(()))
+                    }
+                    Ok(Err(e)) => {
+                        warn!(
+                            fault_id = %fault_id,
+                            pod = fault.pod_name.as_str(),
+                            error = %e,
+                            "❌ Failed to revert fault"
+                        );
+                        (fault_id, Err(e))
+                    }
+                    Err(_) => {
+                        warn!(
+                            fault_id = %fault_id,
+                            pod = fault.pod_name.as_str(),
+                            "⚠️  Revert timed out — manual intervention may be required!"
+                        );
+                        (fault_id, Err(anyhow::anyhow!("Revert timed out")))
+                    }
                 }
-                Ok(Err(e)) => {
-                    warn!(
-                        fault_id = %fault.fault_id,
-                        pod = fault.pod_name.as_str(),
-                        error = %e,
-                        "❌ Failed to revert fault"
-                    );
-                    results.push((fault.fault_id, Err(e)));
-                }
-                Err(_) => {
-                    warn!(
-                        fault_id = %fault.fault_id,
-                        pod = fault.pod_name.as_str(),
-                        "⚠️  Revert timed out — manual intervention may be required!"
-                    );
-                    results.push((fault.fault_id, Err(anyhow::anyhow!("Revert timed out"))));
-                }
+            });
+        }
+
+        // Collect results with 30s total deadline
+        let total_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut results = Vec::new();
+
+        while let Ok(Some(result)) =
+            tokio::time::timeout_at(total_deadline, join_set.join_next()).await
+        {
+            if let Ok(r) = result {
+                results.push(r);
             }
         }
 
@@ -185,6 +215,7 @@ impl FaultTracker {
             "🧹 Fault cleanup complete"
         );
 
+        self.reverting.store(false, Ordering::SeqCst);
         results
     }
 }

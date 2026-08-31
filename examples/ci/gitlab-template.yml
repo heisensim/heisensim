@@ -12,9 +12,9 @@
 
 .heisensim-chaos-test:
   stage: test
-  image: ghcr.io/heisensim/heisensim:v0.10.0
+  image: ghcr.io/heisensim/heisensim:v0.15.0
   variables:
-    HEISENSIM_VERSION: "v0.10.0"
+    HEISENSIM_VERSION: "v0.15.0"
     HEISENSIM_CONFIG: "heisensim.toml"
     HEISENSIM_MODE: "explore"
     HEISENSIM_SEED: "0x42"

@@ -950,8 +950,10 @@ async fn handle_run(
                 Some(snapshot)
             }
             None => {
-                warn!("⚠️  No probe data during warmup — baseline diffing disabled");
-                None
+                anyhow::bail!(
+                    "No probe data captured during warmup — cannot establish baseline.\n\
+                     Check that probes are configured correctly and warmup duration is sufficient."
+                );
             }
         }
     } else {
@@ -3051,8 +3053,10 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
                 Some(snapshot)
             }
             None => {
-                warn!("⚠️  No probe data during warmup — baseline diffing disabled");
-                None
+                anyhow::bail!(
+                    "No probe data captured during warmup — cannot establish baseline.\n\
+                     Check that probes are configured correctly and warmup duration is sufficient."
+                );
             }
         }
     } else {
@@ -3269,10 +3273,40 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
     let final_events = handle.events();
     let mut exit_code = if summary.total_failures > 0 { 1 } else { 0 };
 
+    // Baseline diff properties (if --baseline was enabled) — evaluate BEFORE report
+    let mut baseline_verdicts = Vec::new();
+    if let Some(ref snapshot) = baseline_snapshot {
+        info!("📊 Evaluating baseline diff properties...");
+        let latency_prop = heisensim_props::BaselineLatencyDiff::new(
+            snapshot.clone(),
+            diverge_warmup,
+            args.max_latency_multiplier,
+        );
+        let avail_prop = heisensim_props::BaselineAvailabilityDiff::new(
+            snapshot.clone(),
+            diverge_warmup,
+            args.max_availability_drop,
+        );
+
+        let lat_verdict = latency_prop.evaluate(&final_events);
+        let avail_verdict = avail_prop.evaluate(&final_events);
+
+        if !lat_verdict.passed || !avail_verdict.passed {
+            warn!("Baseline diff properties FAILED.");
+            exit_code = 1;
+        }
+
+        baseline_verdicts.push(lat_verdict);
+        baseline_verdicts.push(avail_verdict);
+    }
+
     // 17. Output results
     match args.output {
         OutputFormat::Text => {
             report::render_terminal_report(&final_events);
+            if !baseline_verdicts.is_empty() {
+                properties::print_verdicts(&baseline_verdicts);
+            }
             info!(
                 seed = seed,
                 faults = summary.total_faults,
@@ -3291,6 +3325,7 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
                 "duration_secs": duration.as_secs_f64(),
                 "total_faults": summary.total_faults,
                 "total_failures": summary.total_failures,
+                "baseline_verdicts": baseline_verdicts,
                 "passed": exit_code == 0,
                 "soft_fail": args.soft_fail,
             });
@@ -3298,33 +3333,9 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
         }
         _ => {
             report::render_terminal_report(&final_events);
-        }
-    }
-
-    // Baseline diff properties (if --baseline was enabled)
-    if let Some(ref snapshot) = baseline_snapshot {
-        info!("📊 Evaluating baseline diff properties...");
-        let latency_prop = heisensim_props::BaselineLatencyDiff::new(
-            snapshot.clone(),
-            diverge_warmup,
-            args.max_latency_multiplier,
-        );
-        let avail_prop = heisensim_props::BaselineAvailabilityDiff::new(
-            snapshot.clone(),
-            diverge_warmup,
-            args.max_availability_drop,
-        );
-
-        let lat_verdict = latency_prop.evaluate(&final_events);
-        let avail_verdict = avail_prop.evaluate(&final_events);
-
-        if args.output == OutputFormat::Text {
-            properties::print_verdicts(&[lat_verdict.clone(), avail_verdict.clone()]);
-        }
-
-        if !lat_verdict.passed || !avail_verdict.passed {
-            warn!("Baseline diff properties FAILED.");
-            exit_code = 1;
+            if !baseline_verdicts.is_empty() {
+                properties::print_verdicts(&baseline_verdicts);
+            }
         }
     }
 
