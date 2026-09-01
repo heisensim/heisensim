@@ -400,6 +400,10 @@ struct RunArgs {
     /// Export baseline snapshot to a JSON file for CI drift tracking.
     #[arg(long)]
     export_baseline: Option<PathBuf>,
+
+    /// Run in soft-fail mode (exit 0, report only — for CI trust-building)
+    #[arg(long)]
+    soft_fail: bool,
 }
 
 /// Fault profile presets.
@@ -974,23 +978,15 @@ async fn handle_run(
     // Initialize fault tracker for graceful shutdown
     let tracker = std::sync::Arc::new(heisensim_k8s::FaultTracker::new());
 
-    // SIGINT handler — revert all active faults before exiting
-    let shutdown_tracker = tracker.clone();
-    let shutdown_fault_op = fault_op.clone();
+    // CancellationToken for cooperative SIGINT shutdown
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let sigint_token = cancel_token.clone();
     let shutdown_cancel = cancel_tx.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            warn!("⚠️  SIGINT received — reverting all active faults...");
+            warn!("⚠️  SIGINT received — stopping fault injection loop...");
             let _ = shutdown_cancel.send(true); // Stop probes
-            let results = shutdown_tracker.revert_all(&shutdown_fault_op).await;
-            let failed = results.iter().filter(|(_, r)| r.is_err()).count();
-            if failed > 0 {
-                warn!(
-                    "⚠️  {} faults could not be reverted — manual intervention may be required!",
-                    failed
-                );
-            }
-            std::process::exit(130); // 128 + SIGINT
+            sigint_token.cancel(); // Cancel the main loop
         }
     });
 
@@ -999,7 +995,14 @@ async fn handle_run(
     let mut elapsed = std::time::Duration::ZERO;
 
     while elapsed < duration {
-        tokio::time::sleep(fault_interval).await;
+        // Wait for next fault interval OR cancellation
+        tokio::select! {
+            _ = tokio::time::sleep(fault_interval) => {}
+            _ = cancel_token.cancelled() => {
+                warn!("⚠️  Cancellation received — exiting fault loop");
+                break;
+            }
+        }
         elapsed += fault_interval;
 
         if elapsed >= duration {
@@ -1466,6 +1469,7 @@ async fn handle_run(
             "total_failures": summary.total_failures,
             "properties": verdicts,
             "passed": exit_code == 0,
+            "soft_fail": args.soft_fail,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else if args.output == OutputFormat::Junit {
@@ -1505,7 +1509,13 @@ async fn handle_run(
         cluster.delete().await?;
     }
 
-    Ok(exit_code)
+    // Soft-fail: override exit code to 0
+    if args.soft_fail && exit_code != 0 {
+        info!("Soft-fail mode: failures detected but exiting with code 0.");
+        Ok(0)
+    } else {
+        Ok(exit_code)
+    }
 }
 
 /// Parse a duration string like "30s", "2m", "1h" into std::time::Duration

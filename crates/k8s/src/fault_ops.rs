@@ -206,6 +206,7 @@ impl FaultOperator {
         let output = tokio::process::Command::new("kubectl")
             .args(["exec", "-n", namespace, pod_name, "--"])
             .args(command)
+            .kill_on_drop(true)
             .output()
             .await
             .context("Failed to run kubectl exec")?;
@@ -263,6 +264,7 @@ impl FaultOperator {
                 "--",
             ])
             .args(command)
+            .kill_on_drop(true)
             .output()
             .await
             .context("Failed to run kubectl debug")?;
