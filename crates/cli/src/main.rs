@@ -1009,6 +1009,13 @@ async fn handle_run(
             break;
         }
 
+        // Re-check cancellation after sleep — SIGINT may have arrived
+        // between sleep completion and fault injection start
+        if cancel_token.is_cancelled() {
+            warn!("⚠️  Cancellation detected — skipping fault injection");
+            break;
+        }
+
         // Pick a random pod to target
         let live_pods = heisensim_k8s::discovery::discover_pods(&client, &args.namespace).await?;
         let ready_pods: Vec<_> = live_pods.iter().filter(|p| p.is_ready).collect();
