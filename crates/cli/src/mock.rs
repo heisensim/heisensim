@@ -241,6 +241,12 @@ pub async fn handle_mock_run(
         }
     }
 
+    // Soft-fail: override exit code to 0
+    if args.soft_fail && exit_code != 0 {
+        info!("Soft-fail mode: failures detected but exiting with code 0.");
+        return Ok(0);
+    }
+
     Ok(exit_code)
 }
 
