@@ -1144,12 +1144,22 @@ async fn handle_run(
                     .inject_stress(&args.namespace, &target.name, workers, mem, 15.0)
                     .await
                 {
-                    Ok(id) => info!(
-                        "  Fault {}: {}x CPU + {}MB RAM for 15s",
-                        id,
-                        workers,
-                        mem / (1024 * 1024)
-                    ),
+                    Ok((id, debug_container)) => {
+                        info!(
+                            "  Fault {}: {}x CPU + {}MB RAM for 15s",
+                            id,
+                            workers,
+                            mem / (1024 * 1024)
+                        );
+                        let fault = heisensim_k8s::ActiveFault {
+                            fault_id: id,
+                            kind: heisensim_k8s::ActiveFaultKind::Stress { debug_container },
+                            namespace: args.namespace.clone(),
+                            pod_name: target.name.clone(),
+                            injected_at: std::time::Instant::now(),
+                        };
+                        tracker.track(fault).await;
+                    }
                     Err(e) => warn!("  Failed to inject stress: {}", e),
                 }
             }

@@ -86,6 +86,11 @@ impl FaultOperator {
         }
     }
 
+    /// Returns the injection method used by this operator.
+    pub fn inject_method(&self) -> InjectMethod {
+        self.inject_method
+    }
+
     /// Inject a pod crash by deleting the pod.
     pub async fn inject_pod_crash(
         &self,
@@ -444,7 +449,7 @@ impl FaultOperator {
         cpu_workers: u32,
         mem_bytes: u64,
         duration_secs: f64,
-    ) -> Result<Uuid> {
+    ) -> Result<(Uuid, Option<String>)> {
         crate::fencing::validate_namespace(namespace)?;
         let fault_id = Uuid::new_v4();
         let target = format!("{}/{}", namespace, pod_name);
@@ -472,6 +477,16 @@ impl FaultOperator {
         let mem_str = mem_bytes.to_string();
         let duration_str = format!("{}s", duration_secs);
 
+        // Generate debug container name if using Debug method
+        let debug_container = match self.inject_method {
+            InjectMethod::Debug => Some(format!(
+                "heisensim-stress-{}",
+                &Uuid::new_v4().to_string()[..8]
+            )),
+            InjectMethod::Exec => None,
+        };
+        let container_for_return = debug_container.clone();
+
         // Run stress-ng inline (it self-terminates after --timeout).
         // Caller tracks via FaultTracker for bookkeeping.
         let op_clone = FaultOperator::with_method(
@@ -496,10 +511,48 @@ impl FaultOperator {
                 "--quiet",
             ];
 
-            if let Err(e) = op_clone.exec_network_command(&ns, &pn, &command).await {
-                warn!(pod = pn.as_str(), error = %e, "Failed to inject stress");
+            let result = if let Some(ref container) = debug_container {
+                // Use debug container with the pre-generated name
+                let debug_name = container.clone();
+                let cmd_str = command.join(" ");
+                info!(
+                    pod = pn.as_str(),
+                    debug_container = debug_name.as_str(),
+                    cmd = cmd_str.as_str(),
+                    method = "debug",
+                    "Executing stress via ephemeral debug container"
+                );
+                let output = tokio::process::Command::new("kubectl")
+                    .args([
+                        "debug",
+                        "-n",
+                        &ns,
+                        &pn,
+                        "--image=ghcr.io/heisensim/heisensim:latest",
+                        &format!("--container={}", debug_name),
+                        "--",
+                    ])
+                    .args(&command)
+                    .kill_on_drop(true)
+                    .output()
+                    .await;
+                match output {
+                    Ok(o) if o.status.success() => {
+                        Ok(String::from_utf8_lossy(&o.stdout).to_string())
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        Err(anyhow::anyhow!("kubectl debug failed: {}", stderr.trim()))
+                    }
+                    Err(e) => Err(anyhow::anyhow!("Failed to run kubectl debug: {}", e)),
+                }
             } else {
-                record_fault_reverted("stress", &pn);
+                op_clone.exec_network_command(&ns, &pn, &command).await
+            };
+
+            match result {
+                Ok(_) => record_fault_reverted("stress", &pn),
+                Err(e) => warn!(pod = pn.as_str(), error = %e, "Failed to inject stress"),
             }
 
             op_clone
@@ -508,7 +561,7 @@ impl FaultOperator {
             info!(pod = pn.as_str(), "Stress completed");
         });
 
-        Ok(fault_id)
+        Ok((fault_id, container_for_return))
     }
 
     /// Inject DNS failure using iptables.
