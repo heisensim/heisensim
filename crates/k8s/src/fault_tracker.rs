@@ -17,8 +17,10 @@ pub enum ActiveFaultKind {
     Partition { target_ip: String },
     /// DNS blackhole via iptables DROP on port 53
     DnsFailure,
-    /// CPU/memory stress via stress-ng (killed on cleanup)
-    Stress,
+    /// CPU/memory stress via stress-ng (killed on cleanup).
+    /// Stores the debug container name when using ephemeral containers,
+    /// so pkill targets the correct container.
+    Stress { debug_container: Option<String> },
 }
 
 /// An active fault that has been injected but not yet reverted.
@@ -85,7 +87,8 @@ impl FaultTracker {
     ///
     /// Uses an atomic guard to prevent concurrent calls from draining the list.
     /// Reverts are parallelized across pods with a 10s per-pod timeout and
-    /// 30s total deadline.
+    /// 30s total deadline. Faults that fail to revert or time out are requeued
+    /// so subsequent calls can retry them.
     pub async fn revert_all(&self, fault_op: &FaultOperator) -> Vec<(Uuid, Result<()>)> {
         // Guard: only one revert_all can run at a time
         if self
@@ -123,7 +126,6 @@ impl FaultTracker {
 
         for fault in faults {
             let fo = fault_op.clone();
-            let fault_id = fault.fault_id;
             let timeout = per_pod_timeout;
 
             join_set.spawn(async move {
@@ -150,8 +152,32 @@ impl FaultTracker {
                             fo.revert_dns_failure(&fault.namespace, &fault.pod_name, fault.fault_id)
                                 .await
                         }
-                        ActiveFaultKind::Stress => {
-                            // Kill stress-ng rather than assuming self-termination
+                        ActiveFaultKind::Stress {
+                            debug_container: Some(container),
+                        } => {
+                            // Kill stress-ng in the specific debug container
+                            let _ = tokio::process::Command::new("kubectl")
+                                .args([
+                                    "exec",
+                                    "-n",
+                                    &fault.namespace,
+                                    &fault.pod_name,
+                                    "-c",
+                                    container,
+                                    "--",
+                                    "pkill",
+                                    "-9",
+                                    "stress-ng",
+                                ])
+                                .kill_on_drop(true)
+                                .output()
+                                .await;
+                            Ok(())
+                        }
+                        ActiveFaultKind::Stress {
+                            debug_container: None,
+                        } => {
+                            // Exec mode: pkill in the pod's default container
                             fo.exec_in_pod(
                                 &fault.namespace,
                                 &fault.pod_name,
@@ -168,29 +194,38 @@ impl FaultTracker {
                 match result {
                     Ok(Ok(())) => {
                         info!(
-                            fault_id = %fault_id,
+                            fault_id = %fault.fault_id,
                             pod = fault.pod_name.as_str(),
                             kind = ?fault.kind,
                             "✅ Reverted fault"
                         );
-                        (fault_id, Ok(()))
+                        (fault.fault_id, Ok(()), None) // success — don't requeue
                     }
                     Ok(Err(e)) => {
                         warn!(
-                            fault_id = %fault_id,
+                            fault_id = %fault.fault_id,
                             pod = fault.pod_name.as_str(),
                             error = %e,
-                            "❌ Failed to revert fault"
+                            "❌ Failed to revert fault — requeued for retry"
                         );
-                        (fault_id, Err(e))
+                        let err_msg = format!("{}", e);
+                        (
+                            fault.fault_id,
+                            Err(anyhow::anyhow!("{}", err_msg)),
+                            Some(fault), // requeue
+                        )
                     }
                     Err(_) => {
                         warn!(
-                            fault_id = %fault_id,
+                            fault_id = %fault.fault_id,
                             pod = fault.pod_name.as_str(),
-                            "⚠️  Revert timed out — manual intervention may be required!"
+                            "⚠️  Revert timed out — requeued for retry"
                         );
-                        (fault_id, Err(anyhow::anyhow!("Revert timed out")))
+                        (
+                            fault.fault_id,
+                            Err(anyhow::anyhow!("Revert timed out")),
+                            Some(fault), // requeue
+                        )
                     }
                 }
             });
@@ -199,13 +234,28 @@ impl FaultTracker {
         // Collect results with 30s total deadline
         let total_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut results = Vec::new();
+        let mut requeue = Vec::new();
 
         while let Ok(Some(result)) =
             tokio::time::timeout_at(total_deadline, join_set.join_next()).await
         {
-            if let Ok(r) = result {
-                results.push(r);
+            if let Ok((fault_id, outcome, maybe_fault)) = result {
+                results.push((fault_id, outcome));
+                if let Some(fault) = maybe_fault {
+                    requeue.push(fault);
+                }
             }
+        }
+
+        // Requeue any faults that failed or timed out
+        if !requeue.is_empty() {
+            warn!(
+                count = requeue.len(),
+                "⚠️  {} fault(s) could not be reverted — requeued for manual cleanup",
+                requeue.len()
+            );
+            let mut active = self.active.lock().await;
+            active.extend(requeue);
         }
 
         let (ok, failed): (Vec<_>, Vec<_>) = results.iter().partition(|(_, r)| r.is_ok());
