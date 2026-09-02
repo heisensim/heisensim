@@ -528,7 +528,7 @@ impl FaultOperator {
                         "-n",
                         &ns,
                         &pn,
-                        "--image=nicolaka/netshoot:latest",
+                        "--image=ghcr.io/heisensim/heisensim:latest",
                         &format!("--container={}", debug_name),
                         "--",
                     ])

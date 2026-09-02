@@ -156,7 +156,7 @@ impl FaultTracker {
                             debug_container: Some(container),
                         } => {
                             // Kill stress-ng in the specific debug container
-                            let _ = tokio::process::Command::new("kubectl")
+                            match tokio::process::Command::new("kubectl")
                                 .args([
                                     "exec",
                                     "-n",
@@ -171,8 +171,24 @@ impl FaultTracker {
                                 ])
                                 .kill_on_drop(true)
                                 .output()
-                                .await;
-                            Ok(())
+                                .await
+                            {
+                                Ok(o) if o.status.success() => Ok(()),
+                                Ok(o) => {
+                                    // pkill exits 1 when no processes matched (already stopped)
+                                    if o.status.code() == Some(1) {
+                                        Ok(()) // stress-ng already exited
+                                    } else {
+                                        let stderr = String::from_utf8_lossy(&o.stderr);
+                                        Err(anyhow::anyhow!(
+                                            "pkill stress-ng failed (status {}): {}",
+                                            o.status,
+                                            stderr.trim()
+                                        ))
+                                    }
+                                }
+                                Err(e) => Err(anyhow::anyhow!("kubectl exec failed: {}", e)),
+                            }
                         }
                         ActiveFaultKind::Stress {
                             debug_container: None,
@@ -184,7 +200,7 @@ impl FaultTracker {
                                 &["pkill", "-9", "stress-ng"],
                             )
                             .await
-                            .ok(); // Best-effort kill
+                            .ok(); // Best-effort — stress-ng may have already exited
                             Ok(())
                         }
                     }
