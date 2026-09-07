@@ -39,9 +39,9 @@ heisensim employs several safety mechanisms:
 
 - **Namespace fencing** — blocks injection into `kube-system`, `kube-public`, and configurable blocked namespaces
 - **No privileged containers** — uses ephemeral debug containers (no `--privileged`)
-- **kill_on_drop** — all spawned kubectl processes are killed if the parent exits
-- **Fault tracking** — `FaultTracker` ensures injected faults are reverted on shutdown
-- **Dead Man's Switch** — automatic cleanup even on ungraceful termination
+- **kill_on_drop** — spawned kubectl processes are killed if the parent exits (applied to fault injection and debug container paths)
+- **Fault tracking** — `FaultTracker` attempts to revert injected faults on shutdown; failed reverts are requeued for retry, but cleanup is best-effort and orphaned rules may require manual intervention
+- **Dead Man's Switch** — best-effort cleanup on ungraceful termination via `AtomicBool` + `JoinSet`; not a hard guarantee under all crash scenarios
 - **Dependency auditing** — `cargo deny` checks for known vulnerabilities
 
 ## Acknowledgments
