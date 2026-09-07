@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="orbit" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <!-- Orbital rings (Heisenberg uncertainty / quantum theme) -->
+  <ellipse cx="60" cy="60" rx="50" ry="18" fill="none" stroke="url(#orbit)" stroke-width="2.5" opacity="0.8" transform="rotate(0 60 60)"/>
+  <ellipse cx="60" cy="60" rx="50" ry="18" fill="none" stroke="url(#orbit)" stroke-width="2.5" opacity="0.8" transform="rotate(60 60 60)"/>
+  <ellipse cx="60" cy="60" rx="50" ry="18" fill="none" stroke="url(#orbit)" stroke-width="2.5" opacity="0.8" transform="rotate(120 60 60)"/>
+  <!-- Core nucleus -->
+  <circle cx="60" cy="60" r="12" fill="url(#core)"/>
+  <!-- Electron particles on orbits -->
+  <circle cx="110" cy="60" r="4" fill="#60a5fa"/>
+  <circle cx="35" cy="16.7" r="4" fill="#a78bfa"/>
+  <circle cx="35" cy="103.3" r="4" fill="#818cf8"/>
+</svg>

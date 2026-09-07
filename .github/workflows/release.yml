@@ -54,9 +54,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           TARBALL="heisensim-$TAG-${{ matrix.target }}.tar.gz"
-          cd target/${{ matrix.target }}/release
-          tar -czf ../../../$TARBALL heisensim
-          cd ../../../
+          STAGING="heisensim-$TAG-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/heisensim" "$STAGING/"
+          cp LICENSE LICENSE-MIT LICENSE-APACHE README.md "$STAGING/"
+          tar -czf "$TARBALL" "$STAGING"
           echo "TARBALL=$TARBALL" >> $GITHUB_ENV
 
       - name: Upload artifact

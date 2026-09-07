@@ -1,12 +1,30 @@
-# heisensim
+<p align="center">
+  <img src="assets/logo.svg" height="100" alt="heisensim logo">
+</p>
 
-[![CI](https://github.com/heisensim/heisensim/actions/workflows/ci.yml/badge.svg)](https://github.com/heisensim/heisensim/actions)
-[![Release](https://github.com/heisensim/heisensim/actions/workflows/release.yml/badge.svg)](https://github.com/heisensim/heisensim/releases)
-[![Crates.io](https://img.shields.io/crates/v/heisensim.svg)](https://crates.io/crates/heisensim)
-[![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-MIT)
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/heisensim/heisensim?quickstart=1)
+<h1 align="center">heisensim</h1>
 
-> **"Inject faults. Verify SLAs. In CI."**
+<p align="center">
+  <strong>Inject faults. Verify SLAs. In CI.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/heisensim/heisensim/actions"><img src="https://github.com/heisensim/heisensim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/heisensim/heisensim/releases"><img src="https://github.com/heisensim/heisensim/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://crates.io/crates/heisensim"><img src="https://img.shields.io/crates/v/heisensim.svg" alt="Crates.io"></a>
+  <a href="https://github.com/heisensim/heisensim/releases"><img src="https://img.shields.io/github/downloads/heisensim/heisensim/total?label=downloads&color=blue" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg" alt="License"></a>
+  <a href="https://github.com/heisensim/heisensim/discussions"><img src="https://img.shields.io/github/discussions/heisensim/heisensim?color=blue&label=discussions" alt="Discussions"></a>
+</p>
+
+<p align="center">
+  <a href="https://heisensim.dev">Website</a> •
+  <a href="https://github.com/heisensim/heisensim/discussions">Discussions</a> •
+  <a href="CONTRIBUTING.md">Contributing</a> •
+  <a href="https://codespaces.new/heisensim/heisensim?quickstart=1">Open in Codespaces</a>
+</p>
+
+---
 
 **heisensim** is a chaos testing CLI for Kubernetes that injects faults, monitors health probes, and **verifies your SLA properties automatically**. Exit code 1 when properties fail — CI-native.
 
@@ -25,6 +43,20 @@
 ║  ✅ PASS  low-latency        p99 < 500ms (actual: 230ms)     ║
 ╚═══════════════════════════════════════════════════════════════╝
 ```
+
+## Table of Contents
+
+- [Install](#-install)
+- [Quick Start](#-quick-start)
+- [Property Checking](#-property-checking)
+- [Features](#-features)
+- [CLI Reference](#-cli-reference)
+- [CI Integration](#-ci-integration)
+- [Architecture](#️-architecture)
+- [Comparison](#️-comparison)
+- [Roadmap](#️-roadmap)
+- [License](#-license)
+- [Contributing](#-contributing)
 
 ---
 
@@ -420,17 +452,26 @@ See [`examples/ci/`](examples/ci/) for copy-paste configs.
 
 ## 🏗️ Architecture
 
-```text
-heisensim/
-├── crates/
-│   ├── cli/         # CLI binary & orchestration
-│   ├── timeline/    # Microsecond event bus & correlation
-│   ├── probe/       # Async probe runners (HTTP, TCP, gRPC, exec)
-│   ├── k8s/         # K8s client, discovery & fault operators
-│   ├── fault/       # Fault scheduling, PRNG & DST engine
-│   ├── props/       # Property checking (8 timeline-aware invariants)
-│   ├── core/        # Core types, config & virtual clock
-│   └── intercept/   # (Future: syscall interception)
+```mermaid
+graph TD
+    CLI["cli<br/>CLI binary & orchestration"] --> K8S["k8s<br/>Discovery, fencing & fault operators"]
+    CLI --> FAULT["fault<br/>Scheduling, PRNG & DST engine"]
+    CLI --> PROBE["probe<br/>Async probes (HTTP, TCP, gRPC, exec)"]
+    CLI --> PROPS["props<br/>Property checking (8 invariants)"]
+    CLI --> DIVERGE["diverge<br/>Preview env integration"]
+    CLI --> TIMELINE["timeline<br/>Microsecond event bus"]
+
+    FAULT --> CORE["core<br/>Config, types & virtual clock"]
+    PROBE --> TIMELINE
+    K8S --> TIMELINE
+    PROPS --> TIMELINE
+
+    INTERCEPT["intercept<br/>ptrace syscall & vDSO injection"] --> CORE
+
+    style CLI fill:#7c3aed,stroke:#6366f1,color:#fff
+    style TIMELINE fill:#3b82f6,stroke:#2563eb,color:#fff
+    style CORE fill:#1e293b,stroke:#334155,color:#94a3b8
+    style INTERCEPT fill:#1e293b,stroke:#334155,color:#94a3b8
 ```
 
 ---
@@ -475,5 +516,11 @@ at your option.
 ---
 
 ## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and PR guidelines.
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold this code.
+
+For security vulnerabilities, please see [SECURITY.md](SECURITY.md).
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
