@@ -9,7 +9,12 @@ rust-version = "1.85"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/heisensim/heisensim"
 homepage = "https://heisensim.dev"
+documentation = "https://heisensim.dev"
+readme = "README.md"
 authors = ["Heisensim Contributors"]
+description = "Chaos testing CLI for Kubernetes — inject faults, verify SLAs, in CI"
+keywords = ["kubernetes", "chaos-engineering", "fault-injection", "testing", "slo"]
+categories = ["development-tools::testing", "command-line-utilities"]
 
 [workspace.dependencies]
 heisensim-core = { version = "0.15.0", path = "crates/core" }
