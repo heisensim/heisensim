@@ -224,6 +224,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
             max_latency_multiplier: 3.0,
             max_availability_drop: 10.0,
             export_baseline: None,
+            import_baseline: None,
             soft_fail: false,
         };
         super::handle_run(args, None).await?
@@ -295,6 +296,7 @@ pub async fn run_demo(keep: bool, seed: Option<u64>, duration: &str) -> Result<i
                 max_latency_multiplier: 3.0,
                 max_availability_drop: 10.0,
                 export_baseline: None,
+                import_baseline: None,
                 soft_fail: false,
             };
 

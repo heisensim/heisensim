@@ -180,6 +180,14 @@ struct DivergeRunArgs {
     /// Export baseline snapshot to a JSON file
     #[arg(long)]
     pub export_baseline: Option<PathBuf>,
+
+    /// Import a previously exported baseline snapshot (skips live capture).
+    #[arg(long, conflicts_with = "baseline")]
+    pub import_baseline: Option<PathBuf>,
+
+    /// Warmup duration before fault injection (default: 10s)
+    #[arg(long, default_value = "10s")]
+    pub warmup: String,
 }
 
 #[derive(Args, Debug)]
@@ -400,6 +408,11 @@ struct RunArgs {
     /// Export baseline snapshot to a JSON file for CI drift tracking.
     #[arg(long)]
     export_baseline: Option<PathBuf>,
+
+    /// Import a previously exported baseline snapshot (skips live capture).
+    /// Use with --export-baseline to establish golden baselines for CI drift tracking.
+    #[arg(long, conflicts_with = "baseline")]
+    import_baseline: Option<PathBuf>,
 
     /// Run in soft-fail mode (exit 0, report only — for CI trust-building)
     #[arg(long)]
@@ -917,8 +930,27 @@ async fn handle_run(
     tokio::time::sleep(warmup).await;
     info!("Warmup complete.");
 
-    // Capture baseline snapshot (if --baseline is enabled)
-    let baseline_snapshot = if args.baseline {
+    // Capture or import baseline snapshot
+    let baseline_snapshot = if let Some(ref path) = args.import_baseline {
+        // Import golden baseline from a previous --export-baseline run
+        let json = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read baseline from {}", path.display()))?;
+        let snapshot: heisensim_props::BaselineSnapshot = serde_json::from_str(&json)
+            .with_context(|| format!("Failed to parse baseline from {}", path.display()))?;
+        info!(
+            "📊 Imported baseline from {}: {} probes, {} samples",
+            path.display(),
+            snapshot.probes.len(),
+            snapshot.total_samples
+        );
+        for (name, probe) in &snapshot.probes {
+            info!(
+                "  {} — p50: {}ms, p95: {}ms, avail: {:.1}%",
+                name, probe.p50_ms, probe.p95_ms, probe.success_rate
+            );
+        }
+        Some(snapshot)
+    } else if args.baseline {
         let events = handle.events();
         match heisensim_props::capture_baseline(&events, warmup) {
             Some(snapshot) => {
@@ -3057,13 +3089,32 @@ async fn handle_diverge_run(args: DivergeRunArgs) -> Result<i32> {
     });
 
     // 13. Warmup — let probes stabilize before injecting faults
-    let diverge_warmup = std::time::Duration::from_secs(10);
-    info!("Warming up for 10s (letting probes stabilize)...");
+    let diverge_warmup = parse_duration(&args.warmup)?;
+    info!("Warming up for {}...", args.warmup);
     tokio::time::sleep(diverge_warmup).await;
     info!("Warmup complete.");
 
-    // Capture baseline snapshot (if --baseline is enabled)
-    let baseline_snapshot = if args.baseline {
+    // Capture or import baseline snapshot
+    let baseline_snapshot = if let Some(ref path) = args.import_baseline {
+        // Import golden baseline from a previous --export-baseline run
+        let json = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read baseline from {}", path.display()))?;
+        let snapshot: heisensim_props::BaselineSnapshot = serde_json::from_str(&json)
+            .with_context(|| format!("Failed to parse baseline from {}", path.display()))?;
+        info!(
+            "📊 Imported baseline from {}: {} probes, {} samples",
+            path.display(),
+            snapshot.probes.len(),
+            snapshot.total_samples
+        );
+        for (name, probe) in &snapshot.probes {
+            info!(
+                "  {} — p50: {}ms, p95: {}ms, avail: {:.1}%",
+                name, probe.p50_ms, probe.p95_ms, probe.success_rate
+            );
+        }
+        Some(snapshot)
+    } else if args.baseline {
         let events = handle.events();
         match heisensim_props::capture_baseline(&events, diverge_warmup) {
             Some(snapshot) => {
