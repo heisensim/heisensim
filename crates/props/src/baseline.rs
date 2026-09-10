@@ -719,4 +719,42 @@ mod tests {
         assert!(baseline.probes.contains_key("grpc"));
         assert_eq!(baseline.total_samples, 6);
     }
+
+    #[test]
+    fn test_baseline_snapshot_json_roundtrip() {
+        // Simulate a captured baseline
+        let events = vec![
+            probe_success(1000, "api", 50),
+            probe_success(2000, "api", 60),
+            probe_failed(3000, "api", 0),
+            probe_success(4000, "db", 20),
+            probe_success(5000, "db", 25),
+        ];
+        let original = capture_baseline(&events, Duration::from_secs(10)).unwrap();
+
+        // Export to JSON (what --export-baseline does)
+        let json = serde_json::to_string_pretty(&original).unwrap();
+
+        // Import from JSON (what --import-baseline does)
+        let imported: BaselineSnapshot = serde_json::from_str(&json).unwrap();
+
+        // Verify all fields survive the round-trip
+        assert_eq!(original.probes.len(), imported.probes.len());
+        assert_eq!(original.total_samples, imported.total_samples);
+        assert_eq!(original.duration, imported.duration);
+
+        for (name, orig_probe) in &original.probes {
+            let imp_probe = imported.probes.get(name).unwrap();
+            assert_eq!(orig_probe.success_count, imp_probe.success_count);
+            assert_eq!(orig_probe.failure_count, imp_probe.failure_count);
+            assert_eq!(orig_probe.p50_ms, imp_probe.p50_ms);
+            assert_eq!(orig_probe.p95_ms, imp_probe.p95_ms);
+            assert!(
+                (orig_probe.success_rate - imp_probe.success_rate).abs() < f64::EPSILON,
+                "success_rate mismatch for probe {}",
+                name
+            );
+            assert_eq!(orig_probe.latencies_ms, imp_probe.latencies_ms);
+        }
+    }
 }

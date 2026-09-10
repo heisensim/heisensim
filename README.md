@@ -292,8 +292,8 @@ heisensim run --namespace demo --seed 42 --duration 2m --config heisensim.toml
 | `--otel-endpoint` | — | OTLP endpoint for trace correlation |
 | `--k3d` | — | Spin up ephemeral K3d cluster |
 | `--baseline` | — | A/B baseline diffing (captures metrics during warmup) |
-| `--import-baseline` | — | Import golden baseline JSON for CI drift tracking |
-| `--export-baseline` | — | Export baseline snapshot to JSON file |
+| `--import-baseline` | `<PATH>` | Import golden baseline JSON for CI drift tracking |
+| `--export-baseline` | `<PATH>` | Export baseline snapshot to JSON file |
 | `--soft-fail` | — | Exit 0 even on failures (CI trust-building) |
 
 ### `heisensim simulate`
