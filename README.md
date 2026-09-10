@@ -291,6 +291,10 @@ heisensim run --namespace demo --seed 42 --duration 2m --config heisensim.toml
 | `--output` | `terminal` | Output format: `terminal`, `json`, `markdown` |
 | `--otel-endpoint` | — | OTLP endpoint for trace correlation |
 | `--k3d` | — | Spin up ephemeral K3d cluster |
+| `--baseline` | — | A/B baseline diffing (captures metrics during warmup) |
+| `--import-baseline` | — | Import golden baseline JSON for CI drift tracking |
+| `--export-baseline` | — | Export baseline snapshot to JSON file |
+| `--soft-fail` | — | Exit 0 even on failures (CI trust-building) |
 
 ### `heisensim simulate`
 
@@ -500,7 +504,8 @@ graph TD
 - `v0.13.0` ✅ `--name` process targeting, aarch64 ptrace support
 - `v0.14.0` ✅ Grafana dashboard, streaming OTel metrics, one-command observability stack
 - `v0.15.0` ✅ A/B baseline diffing, Diverge preview env integration, fault tracker + graceful shutdown
-- Future: mdbook docs site, golden baseline import, dead man's switch TTL
+- `v0.15.1` ✅ Golden baseline import (`--import-baseline`), `--warmup` on diverge, hardening
+- Future: mdbook docs site, dead man's switch TTL, structured audit log
 
 ---
 
