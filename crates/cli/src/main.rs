@@ -851,6 +851,17 @@ async fn handle_run(
         Vec::new()
     };
 
+    // Pre-validate imported baseline before creating any resources (K3d, etc.)
+    let imported_baseline = if let Some(ref path) = args.import_baseline {
+        let json = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read baseline from {}", path.display()))?;
+        let snapshot: heisensim_props::BaselineSnapshot = serde_json::from_str(&json)
+            .with_context(|| format!("Failed to parse baseline from {}", path.display()))?;
+        Some(snapshot)
+    } else {
+        None
+    };
+
     // Create K3d cluster if requested
     if args.k3d {
         info!("Creating ephemeral K3d cluster...");
@@ -931,15 +942,10 @@ async fn handle_run(
     info!("Warmup complete.");
 
     // Capture or import baseline snapshot
-    let baseline_snapshot = if let Some(ref path) = args.import_baseline {
-        // Import golden baseline from a previous --export-baseline run
-        let json = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read baseline from {}", path.display()))?;
-        let snapshot: heisensim_props::BaselineSnapshot = serde_json::from_str(&json)
-            .with_context(|| format!("Failed to parse baseline from {}", path.display()))?;
+    let baseline_snapshot = if let Some(snapshot) = imported_baseline {
+        // Use pre-validated golden baseline (validated before K3d cluster creation)
         info!(
-            "📊 Imported baseline from {}: {} probes, {} samples",
-            path.display(),
+            "📊 Imported baseline: {} probes, {} samples",
             snapshot.probes.len(),
             snapshot.total_samples
         );
